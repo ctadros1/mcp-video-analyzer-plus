@@ -135,8 +135,12 @@ describe('cache key covers every result-defining param', () => {
   // changed the emitted frames but hashed to the same key. The compile-time
   // sibling of this table is the ExcludedFromCacheKey guard in analyze-core.ts.
   //
-  // Base options keep skipFrames: true so every row stays on the fast
-  // frameless path (no ffmpeg, no browser fallback).
+  // Base options keep skipFrames: true so rows stay on the frameless path.
+  // The skipFrames: false row does enter the frame path: ffmpeg (strategy 1)
+  // is off because mockAdapter's videoDownload capability is false, and the
+  // puppeteer browser fallback (strategy 2, gated on duration > 0) is off
+  // because the mock metadata reports duration 0 — without that, this row
+  // would launch a real browser against the fake URL.
   const variants = {
     detail: { detail: 'detailed' },
     maxFrames: { maxFrames: 7 },
@@ -146,12 +150,21 @@ describe('cache key covers every result-defining param', () => {
     model: { model: 'medium' },
     language: { language: 'pt' },
     initialPrompt: { initialPrompt: 'Smiles glossary' },
+    skipFrames: { skipFrames: false },
   } satisfies Record<keyof ResultDefiningParams, NonNullable<AnalyzeOptions>>;
 
   it.each(Object.entries(variants))(
     'a repeat call differing only in %s misses the cache',
     async (field, delta) => {
-      const adapter = mockAdapter();
+      const adapter = mockAdapter({
+        getMetadata: vi.fn().mockResolvedValue({
+          platform: 'loom',
+          title: 'Mock',
+          duration: 0,
+          durationFormatted: '0:00',
+          url: 'mock',
+        }),
+      });
       registerAdapter(adapter);
       const url = `https://www.loom.com/share/key-${field}`;
 
