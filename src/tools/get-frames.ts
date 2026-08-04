@@ -9,10 +9,11 @@ import {
   formatTimestamp,
   probeVideoDuration,
 } from '../processors/frame-extractor.js';
-import { optimizeFrames } from '../processors/image-optimizer.js';
+import { optimizeFramesKeepingOriginals } from '../processors/image-optimizer.js';
 import { createProgressReporter } from '../utils/progress.js';
 import { createTempDir } from '../utils/temp-files.js';
 import { isVideoSource, toLocalPath } from '../utils/url-detector.js';
+import { maxWidthParam } from './frame-options.js';
 
 const GetFramesSchema = z.object({
   url: z
@@ -45,6 +46,7 @@ const GetFramesSchema = z.object({
         .default(false)
         .optional()
         .describe('Use dense sampling (1 frame/sec) instead of scene-change detection'),
+      maxWidth: maxWidthParam,
     })
     .optional(),
 });
@@ -129,15 +131,14 @@ Supports: Loom (loom.com/share/...), YouTube/Vimeo/TikTok/Instagram/X/Twitch/Dai
           warnings.push(...extraction.warnings);
 
           if (rawFrames.length > 0) {
-            const optimizedPaths = await optimizeFrames(
-              rawFrames.map((f) => f.filePath),
-              tempDir,
-            ).catch(() => rawFrames.map((f) => f.filePath));
-
-            frames = rawFrames.map((frame, i) => ({
-              ...frame,
-              filePath: optimizedPaths[i] ?? frame.filePath,
-            }));
+            // A failed optimization degrades to the raw frames, but says so —
+            // the analyze tools already warn here, and a systemic sharp/disk
+            // failure that only some tools report is worse than either rule.
+            const optimized = await optimizeFramesKeepingOriginals(rawFrames, tempDir, {
+              maxWidth: options?.maxWidth,
+              onWarning: (w) => warnings.push(w),
+            });
+            frames = optimized.frames;
           }
         }
       }

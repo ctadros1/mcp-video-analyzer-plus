@@ -19,7 +19,12 @@ import {
 } from '../processors/frame-extractor.js';
 import { isMeaningfulOcr, ocrFrames } from '../processors/frame-ocr.js';
 import type { IOcrResult } from '../processors/frame-ocr.js';
-import { optimizeFrames } from '../processors/image-optimizer.js';
+import {
+  keyedFrameMaxWidth,
+  ocrSourceFrames,
+  optimizeFramesKeepingOriginals,
+} from '../processors/image-optimizer.js';
+import type { FrameOriginals } from '../processors/image-optimizer.js';
 import type { IAnalysisResult, IVideoMetadata } from '../types.js';
 import { readAnalysisSidecar, writeAnalysisSidecars } from '../utils/analysis-sidecar.js';
 import type { ResultDefiningParams } from '../utils/analysis-sidecar.js';
@@ -28,6 +33,7 @@ import { filterAnalysisResult } from '../utils/field-filter.js';
 import type { AnalysisField } from '../utils/field-filter.js';
 import { cleanupTempDir, createTempDir } from '../utils/temp-files.js';
 import { toLocalPath } from '../utils/url-detector.js';
+import { maxWidthParam } from './frame-options.js';
 
 /** Shared analysis cache (used by both analyze_video and analyze_videos). */
 const cache = new AnalysisCache();
@@ -66,6 +72,7 @@ export const AnalyzeOptionsSchema = z
       .boolean()
       .optional()
       .describe('Skip frame extraction (transcript + metadata only)'),
+    maxWidth: maxWidthParam,
     detail: z
       .enum(['brief', 'standard', 'detailed'])
       .optional()
@@ -116,6 +123,8 @@ export interface AnalyzeParams {
   maxFrames: number | undefined;
   threshold: number;
   skipFrames: boolean;
+  /** `undefined` = fall back to MCP_FRAME_MAX_WIDTH, then the 800 px default. */
+  maxWidth: number | undefined;
   ocrLanguage: string;
   forceRefresh: boolean;
   transcribe: TranscribeOptions;
@@ -134,6 +143,7 @@ export function resolveAnalyzeParams(options: AnalyzeOptions): AnalyzeParams {
     maxFrames: options?.maxFrames,
     threshold: options?.threshold ?? 0.1,
     skipFrames: options?.skipFrames ?? !config.includeFrames,
+    maxWidth: options?.maxWidth,
     ocrLanguage: options?.ocrLanguage ?? 'eng+por',
     forceRefresh: options?.forceRefresh ?? false,
     transcribe: {
@@ -150,6 +160,10 @@ function resultDefiningParams(params: AnalyzeParams): ResultDefiningParams {
     detail: params.detail,
     maxFrames: params.maxFrames,
     threshold: params.threshold,
+    // The *effective* width, not the raw parameter: a cached 800 px result must
+    // not answer a later `maxWidth: 0` call, and a sidecar written under one
+    // MCP_FRAME_MAX_WIDTH must not be reused after that variable changes.
+    maxWidth: keyedFrameMaxWidth(params.maxWidth),
     ocrLanguage: params.ocrLanguage,
     model: params.transcribe.model,
     language: params.transcribe.language,
@@ -238,6 +252,10 @@ async function runAnalysisPipeline(
       tempDir = await createTempDir();
       let framesExtracted = false;
 
+      // Emitted frame path -> the full-resolution frame it came from, so OCR
+      // below reads the original (see optimizeFramesKeepingOriginals).
+      let frameOriginals: FrameOriginals = new Map();
+
       // Strategy 1: download (no-op for local files) + ffmpeg frame extraction
       // with scene→uniform-sampling fallback for static clips.
       if (adapter.capabilities.videoDownload) {
@@ -263,20 +281,12 @@ async function runAnalysisPipeline(
           await progress(70, `Extracted ${rawFrames.length} frames, optimizing...`);
 
           if (rawFrames.length > 0) {
-            const optimizedPaths = await optimizeFrames(
-              rawFrames.map((f) => f.filePath),
-              tempDir,
-            ).catch((e: unknown) => {
-              warnings.push(
-                `Frame optimization failed: ${e instanceof Error ? e.message : String(e)}`,
-              );
-              return rawFrames.map((f) => f.filePath);
+            const optimized = await optimizeFramesKeepingOriginals(rawFrames, tempDir, {
+              maxWidth: params.maxWidth,
+              onWarning: (w) => warnings.push(w),
             });
-
-            result.frames = rawFrames.map((frame, i) => ({
-              ...frame,
-              filePath: optimizedPaths[i] ?? frame.filePath,
-            }));
+            result.frames = optimized.frames;
+            frameOriginals = optimized.originals;
             framesExtracted = true;
           }
         }
@@ -337,7 +347,8 @@ async function runAnalysisPipeline(
           // on-screen text (static-background Reels/Stories) survive instead of
           // being collapsed by a coarse perceptual hash.
           await progress(82, `Running OCR on ${result.frames.length} frames...`);
-          const perFrame = await ocrFrames(result.frames, ocrLanguage, (completed, total) => {
+          const ocrSource = ocrSourceFrames(result.frames, frameOriginals);
+          const perFrame = await ocrFrames(ocrSource, ocrLanguage, (completed, total) => {
             const pct = 82 + Math.round((completed / total) * 9);
             void progress(pct, `OCR: processing frame ${completed}/${total}...`);
           }).catch((e: unknown): IOcrResult[] => {

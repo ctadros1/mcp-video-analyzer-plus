@@ -118,6 +118,7 @@ stdout is a single JSON document — `metadata`, `transcript`, `ocrResults`, `ti
 |------|-------------|
 | `--detail <level>` | `brief` (metadata + transcript, no frames), `standard` (default), `detailed` |
 | `--max-frames <n>` | Max key frames, 1–60 (default adapts to duration) |
+| `--max-width <px>` | Width cap for emitted frames (default `800`, or `MCP_FRAME_MAX_WIDTH`); `0` keeps the source resolution — see [Frame size](#frame-size-dense-ui-captures) |
 | `--fields <list>` | Output filter — comma-separated subset: `metadata,transcript,frames,comments,chapters,ocrResults,timeline,aiSummary`. Filters the emitted JSON only; use `--detail brief` to actually skip download/frame extraction |
 | `--force-refresh` | Bypass the cache and re-analyze |
 | `--ocr-language <codes>` | Tesseract languages (default `eng+por`) |
@@ -399,6 +400,35 @@ After frame extraction, the pipeline automatically applies:
 | **Annotated timeline** | Merges transcript timestamps + frame timestamps + OCR text into a single chronological view | Gives the AI a unified "what was said, what changed visually, and what text appeared" at each moment |
 
 The OCR step requires `tesseract.js` (included as a dependency). If it fails to load, analysis continues without OCR — no frames or transcript are lost. OCR preprocessing is on by default; set `MCP_OCR_PREPROCESS=0` to OCR the raw frames instead.
+
+OCR always reads the **full-resolution** frame, not the copy emitted to the client. The two have different jobs: the emitted frame is capped for token cost, while recognition needs every pixel it can get.
+
+### Frame size (dense UI captures)
+
+Emitted frames are capped at 800 px wide, which suits the common case — talking-head clips, Reels, bug repros — where the subject fills the frame.
+
+It is the wrong size for a **dense UI capture**: a terminal, dashboard, IDE or spreadsheet recording, where the meaning lives in small text. An unscaled 1920×1080 screen recording lands at 800×450, and a 15 px UI font drops below what a vision model can resolve.
+
+Pass `maxWidth` per call to keep more (or all) of the source resolution — `0` disables the cap:
+
+```jsonc
+get_frames(url, { maxFrames: 8, maxWidth: 0 })   // source resolution
+get_frame_at(url, "2:14", { maxWidth: 1920 })
+analyze_video(url, { detail: "standard", maxWidth: 1568 })
+```
+
+Supported on `analyze_video`, `analyze_videos`, `analyze_moment`, `get_frames`, `get_frame_at` and `get_frame_burst`, and on the CLI as `--max-width <px>`.
+
+Native frames cost several times more context than the default, so raise the cap deliberately — `get_frames` returns up to 20 frames and `analyze_video` at `detailed` up to 60.
+
+| Variable | Applies to | Default | Notes |
+|---|---|---|---|
+| `MCP_FRAME_MAX_WIDTH` | Emitted frame width, in px | `800` | `0` (or `native`/`full`/`original`) disables the cap. A per-call `maxWidth` wins over it |
+| `MCP_FRAME_JPEG_QUALITY` | Emitted frame JPEG quality | `70` | Raise it when thin glyphs matter; env only, there is no per-call quality parameter. Values outside 1–100 fall back |
+
+A value either variable can't use — `1e3`, `1920px`, a quality of `150` — is rejected with a one-time warning on stderr and the default applies. It is not silently accepted: the whole point of the setting is to escape a downscale that otherwise looks like a normal result.
+
+Prefer the per-call parameter: the server starts once per session, so an environment variable cannot differ between an overview of a YouTube clip and a close read of a screen recording. The width a call actually uses is part of the cache and sidecar key, so analyzing the same video at 800 px and then at `maxWidth: 0` re-runs the pipeline instead of returning the first result twice.
 
 ## Complementary Tools
 

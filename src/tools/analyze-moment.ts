@@ -6,10 +6,11 @@ import { buildAnnotatedTimeline } from '../processors/annotated-timeline.js';
 import { deduplicateFrames } from '../processors/frame-dedup.js';
 import { extractFrameBurst, parseTimestamp } from '../processors/frame-extractor.js';
 import { extractTextFromFrames } from '../processors/frame-ocr.js';
-import { optimizeFrames } from '../processors/image-optimizer.js';
+import { ocrSourceFrames, optimizeFramesKeepingOriginals } from '../processors/image-optimizer.js';
 import { createProgressReporter } from '../utils/progress.js';
 import { createTempDir } from '../utils/temp-files.js';
 import { isVideoSource } from '../utils/url-detector.js';
+import { maxWidthParam } from './frame-options.js';
 
 const AnalyzeMomentSchema = z.object({
   url: z
@@ -36,6 +37,7 @@ const AnalyzeMomentSchema = z.object({
     .describe(
       'Tesseract OCR language codes (default: "eng+por"). Use "+" to combine: "eng+spa", "eng+fra+deu".',
     ),
+  maxWidth: maxWidthParam,
 });
 
 export function registerAnalyzeMoment(server: FastMCP): void {
@@ -64,7 +66,7 @@ Supports: Loom (loom.com/share/...), YouTube/Vimeo/TikTok/Instagram/X/Twitch/Dai
     },
     execute: async (args, { reportProgress }) => {
       const progress = createProgressReporter(reportProgress);
-      const { url, from, to } = args;
+      const { url, from, to, maxWidth } = args;
       const count = args.count ?? 10;
       const ocrLanguage = args.ocrLanguage ?? 'eng+por';
 
@@ -136,19 +138,14 @@ Supports: Loom (loom.com/share/...), YouTube/Vimeo/TikTok/Instagram/X/Twitch/Dai
 
       await progress(55, `Extracted ${rawFrames.length} frames, optimizing...`);
 
-      // Optimize frames
-      const optimizedPaths = await optimizeFrames(
-        rawFrames.map((f) => f.filePath),
-        tempDir,
-      ).catch((e: unknown) => {
-        warnings.push(`Frame optimization failed: ${e instanceof Error ? e.message : String(e)}`);
-        return rawFrames.map((f) => f.filePath);
+      // Optimize frames, keeping the mapping back to the full-resolution
+      // originals so OCR below reads those and not the emitted downscale.
+      const optimized = await optimizeFramesKeepingOriginals(rawFrames, tempDir, {
+        maxWidth,
+        onWarning: (w) => warnings.push(w),
       });
-
-      let frames = rawFrames.map((frame, i) => ({
-        ...frame,
-        filePath: optimizedPaths[i] ?? frame.filePath,
-      }));
+      const frameOriginals = optimized.originals;
+      let frames = optimized.frames;
 
       // Dedup
       const beforeDedup = frames.length;
@@ -163,7 +160,8 @@ Supports: Loom (loom.com/share/...), YouTube/Vimeo/TikTok/Instagram/X/Twitch/Dai
 
       // OCR
       await progress(75, `Running OCR on ${frames.length} frames...`);
-      const ocrResults = await extractTextFromFrames(frames, ocrLanguage, (completed, total) => {
+      const ocrSource = ocrSourceFrames(frames, frameOriginals);
+      const ocrResults = await extractTextFromFrames(ocrSource, ocrLanguage, (completed, total) => {
         const pct = 75 + Math.round((completed / total) * 15);
         progress(pct, `OCR: processing frame ${completed}/${total}...`);
       }).catch((e: unknown) => {

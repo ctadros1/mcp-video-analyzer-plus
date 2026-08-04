@@ -4,10 +4,11 @@ import { z } from 'zod';
 import { getAdapter } from '../adapters/adapter.interface.js';
 import { extractBrowserFrames } from '../processors/browser-frame-extractor.js';
 import { extractFrameBurst, parseTimestamp } from '../processors/frame-extractor.js';
-import { optimizeFrames } from '../processors/image-optimizer.js';
+import { optimizeFramesKeepingOriginals } from '../processors/image-optimizer.js';
 import { createProgressReporter } from '../utils/progress.js';
 import { createTempDir } from '../utils/temp-files.js';
 import { isVideoSource, toLocalPath } from '../utils/url-detector.js';
+import { maxWidthParam } from './frame-options.js';
 
 const GetFrameBurstSchema = z.object({
   url: z
@@ -33,6 +34,7 @@ const GetFrameBurstSchema = z.object({
     .default(false)
     .optional()
     .describe('Return frames as base64 inline instead of file paths'),
+  maxWidth: maxWidthParam,
 });
 
 export function registerGetFrameBurst(server: FastMCP): void {
@@ -66,7 +68,7 @@ Returns: N images evenly distributed between the from and to timestamps.`,
     },
     execute: async (args, { reportProgress }) => {
       const progress = createProgressReporter(reportProgress);
-      const { url, from, to, count } = args;
+      const { url, from, to, count, maxWidth } = args;
       const frameCount = count ?? 5;
 
       const adapter = getAdapter(url);
@@ -137,13 +139,16 @@ Returns: N images evenly distributed between the from and to timestamps.`,
           }
 
           await progress(70, `Extracted ${frames.length} frames, optimizing...`);
-          const optimizedPaths = await optimizeFrames(
-            frames.map((f) => f.filePath),
-            tempDir,
-          ).catch(() => frames.map((f) => f.filePath));
+          // Degrade to the raw frames on a sharp/disk failure, but report it —
+          // the analyze tools warn on the identical rejection, and a systemic
+          // failure that only half the tools mention is worse than either rule.
+          const optimized = await optimizeFramesKeepingOriginals(frames, tempDir, {
+            maxWidth,
+            onWarning: (w) => warnings.push(w),
+          });
 
           await progress(100, 'Burst extraction complete');
-          return withImages(optimizedPaths);
+          return withImages(optimized.frames.map((f) => f.filePath));
         }
       }
 
