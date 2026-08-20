@@ -611,13 +611,33 @@ The distinctness rule is never relaxed — a bucket that holds nothing new contr
 
 **Cost.** OCR is what selection costs, and it is bounded three ways:
 
-- **A shortlist, not the pool.** Candidates are first ranked on sharpness and diversity alone; only the top `2 x maxFrames` (hard ceiling 24) are recognized. The text signal only has to separate the frames still in contention.
-- **A wall-clock budget.** If the pass exceeds 20s the text signal is dropped for *every* candidate at once and a warning says so. Never for some of them — that would rank the recognized frames against zeros and bias the result toward whichever finished first.
+- **A shortlist, not the pool.** Only the top `2 x maxFrames` candidates (hard ceiling 12) are recognized, drawn *through the buckets* so every region of the clip contributes one. The shortlist bounds what gets **read**, never what gets **selected** — see the frame-count note below.
+- **A wall-clock budget.** If the pass exceeds 12s the text signal is dropped for *every* candidate at once and a warning says so. Never for some of them — that would rank the recognized frames against zeros and bias the result toward whichever finished first.
 - **`frameOcrWeight: 0` skips it entirely.** Weight 0 says text must not influence the ranking, so recognizing it would be pure cost. This is the escape hatch for a long or text-dense video that is taking too long.
 
 Measured on a 6-minute 1080p clip: the legacy extractor runs in 4.1s, smart selection without OCR in 4.4s, and smart selection with OCR in 5.9s. Before the shortlist existed that last figure was 20.0s — recognizing all 60 candidates at 3000px each — which was enough to time out a real export.
 
 In `analyze_video` the results are **reused** by the pipeline's own OCR step rather than recomputed, so selected frames are recognized once, not twice. `get_frames` has never run OCR and still doesn't: its smart mode scores on sharpness and diversity only, which keeps it the fast tool. Use `analyze_video` when the on-screen-text signal matters.
+
+### How many frames do you actually get?
+
+`maxFrames` is a **budget, not a quota**: selection returns up to that many, minus anything that was a near-duplicate of a frame already kept. Fewer frames means the video had that many distinct looks — it is not a failure.
+
+At `detail: "standard"` the budget scales with duration, and an explicit `maxFrames` always wins:
+
+| video duration | default `maxFrames` | ≈ frames per minute |
+|---|---|---|
+| ≤ 30s | 12 | — |
+| ≤ 1 min | 20 | 20 |
+| ≤ 3 min | 30 | 10 |
+| ≤ 10 min | 45 | 9 at 5 min |
+| > 10 min | 60 | 6 at 10 min |
+
+`detail: "detailed"` pins it at 60; `detail: "brief"` extracts no frames at all.
+
+Measured on a 5-minute clip with ordinary visual variation, at the default budget: **45 frames returned, 9 in every single minute** — temporal clustering spreads them evenly by construction. Raising `maxFrames` to 60 gives 60 (12 per minute); lowering it to 20 gives 20 (4 per minute).
+
+The one case that returns noticeably fewer is a video whose frames genuinely are near-identical — a static slide held for minutes, or a synthetic test pattern. On such a clip a 45-frame budget may return 17, because the other 28 carried nothing new. If you want them anyway, raise `frameCandidateMultiplier` (more candidates to choose from) — but the usual reason for a low count is that the extra frames would have been redundant.
 
 **If an export is still too slow**, in rough order of impact: `frameOcrWeight: 0` (skips OCR ranking), `frameSelection: "sceneChange"` (the legacy path), `detail: "brief"` (metadata + transcript, no frames at all), or a smaller `maxFrames`. Whisper transcription of a long video is usually the larger cost — `skipFrames` is not the lever there, `detail: "brief"` is.
 

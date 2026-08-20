@@ -49,7 +49,12 @@ const MAX_CANDIDATES = 90;
  * cutting the work by more than half at the default budget.
  */
 const OCR_SHORTLIST_MULTIPLE = 2;
-const OCR_SHORTLIST_CEILING = 24;
+// Measured on a 5-minute clip at the default 45-frame budget: a 24-frame
+// shortlist cost 20s and was abandoned by the budget guard below — the worst
+// outcome available, a full wait for a signal that then went unused. 12 keeps
+// the pass inside its budget on the same clip while still handing the text
+// signal to a bucket-spread dozen frames.
+const OCR_SHORTLIST_CEILING = 12;
 
 /**
  * Wall-clock budget for the whole OCR scoring pass.
@@ -61,7 +66,7 @@ const OCR_SHORTLIST_CEILING = 24;
  * never for some of them, which would rank the recognized frames against zeros
  * and silently bias the result toward whichever ones happened to finish first.
  */
-const OCR_SCORING_BUDGET_MS = 20_000;
+const OCR_SCORING_BUDGET_MS = 12_000;
 
 /** Thrown to stop `ocrFrames` once the scoring budget is spent. */
 const OCR_BUDGET_EXCEEDED = Symbol('ocr-budget-exceeded');
@@ -514,36 +519,6 @@ export async function selectKeyFrames(
     text: '',
   }));
 
-  // A weight of 0 says on-screen text must not influence the ranking, so
-  // recognizing it would be pure cost. Checked before the shortlist, since it
-  // makes the entire pass unnecessary rather than merely smaller.
-  const ocrWeight = options.ocrWeight ?? DEFAULT_OCR_WEIGHT;
-  const wantsOcr = (options.useOcr ?? true) && ocrWeight > 0;
-
-  // Shortlist first, on the cheap signals alone: OCR only has to separate the
-  // frames still in contention, and the pool is where the cost lives.
-  const shortlistSize = Math.min(target * OCR_SHORTLIST_MULTIPLE, OCR_SHORTLIST_CEILING);
-  const pool = wantsOcr ? selectDiverseFrames(scored, shortlistSize, { ocrWeight: 0 }) : scored;
-
-  if (wantsOcr) {
-    const ocrResults = await ocrWithBudget(pool, options.ocrLanguage);
-    if (ocrResults === null) {
-      warnings.push(
-        `Smart selection abandoned the OCR signal after ${OCR_SCORING_BUDGET_MS / 1000}s (${pool.length} frames); ranked on sharpness and visual diversity only.`,
-      );
-    } else if (ocrResults.length !== pool.length) {
-      warnings.push(
-        'OCR scoring unavailable (tesseract.js missing or recognition aborted); ranked on sharpness and visual diversity only.',
-      );
-    } else {
-      pool.forEach((entry, i) => {
-        entry.textScore = ocrTextScore(ocrResults[i]);
-        entry.text = normalizeOcrText(ocrResults[i]);
-        if (ocrResults[i]) ocrByFrame.set(entry.frame, ocrResults[i]);
-      });
-    }
-  }
-
   // Temporal scene clustering: the relaxed scene detector's own hits are the
   // cut list, subdivided to roughly one bucket per requested frame. A clip with
   // no cuts still buckets — evenly, by time — which is exactly the case that
@@ -555,7 +530,45 @@ export async function selectKeyFrames(
     target,
   );
 
-  const selected = selectDiverseFrames(pool, target, { ocrWeight, sceneBuckets });
+  // A weight of 0 says on-screen text must not influence the ranking, so
+  // recognizing it would be pure cost. Checked before the shortlist, since it
+  // makes the entire pass unnecessary rather than merely smaller.
+  const ocrWeight = options.ocrWeight ?? DEFAULT_OCR_WEIGHT;
+  const wantsOcr = (options.useOcr ?? true) && ocrWeight > 0;
+
+  // The shortlist bounds what gets RECOGNIZED. It must never bound what gets
+  // SELECTED: an earlier version passed it on as the selection pool, and since
+  // the shortlist is itself de-duplicated, `maxFrames: 20` came back with six
+  // frames. Scoring narrows; only the budget decides how many frames come out.
+  let shortlist: ScoredFrame[] = [];
+  if (wantsOcr) {
+    const shortlistSize = Math.min(target * OCR_SHORTLIST_MULTIPLE, OCR_SHORTLIST_CEILING);
+    // Drawn through the buckets, so every region of the clip contributes a
+    // recognized candidate. A shortlist taken by global score would hand the
+    // text signal to one passage and leave the rest ranked on sharpness alone.
+    shortlist = selectDiverseFrames(scored, shortlistSize, { ocrWeight: 0, sceneBuckets });
+
+    const ocrResults = await ocrWithBudget(shortlist, options.ocrLanguage);
+    if (ocrResults === null) {
+      warnings.push(
+        `Smart selection abandoned the OCR signal after ${OCR_SCORING_BUDGET_MS / 1000}s (${shortlist.length} frames); ranked on sharpness and visual diversity only.`,
+      );
+    } else if (ocrResults.length !== shortlist.length) {
+      warnings.push(
+        'OCR scoring unavailable (tesseract.js missing or recognition aborted); ranked on sharpness and visual diversity only.',
+      );
+    } else {
+      // `selectDiverseFrames` returns the same objects it was given, so writing
+      // here updates the entries in `scored` that selection reads below.
+      shortlist.forEach((entry, i) => {
+        entry.textScore = ocrTextScore(ocrResults[i]);
+        entry.text = normalizeOcrText(ocrResults[i]);
+        if (ocrResults[i]) ocrByFrame.set(entry.frame, ocrResults[i]);
+      });
+    }
+  }
+
+  const selected = selectDiverseFrames(scored, target, { ocrWeight, sceneBuckets });
 
   const ocrByPath = new Map<string, IOcrResult>();
   for (const entry of selected) {
@@ -566,7 +579,7 @@ export async function selectKeyFrames(
   warnings.push(
     `Smart frame selection: scored ${candidates.length} candidates ` +
       `(${sceneFrames.length} scene-change, ${uniformFrames.length} uniform)` +
-      `${pool.length < candidates.length ? `, OCR-ranked the top ${pool.length}` : ''}` +
+      `${shortlist.length > 0 ? `, OCR-read ${shortlist.length}` : ''}` +
       `${sceneBuckets.length > 0 ? `, spread across ${sceneBuckets.length + 1} temporal buckets` : ''} ` +
       `and kept ${selected.length}.`,
   );

@@ -65,7 +65,7 @@ describe('OCR scoring cost', () => {
 
   it('never exceeds the absolute ceiling, however many frames are requested', async () => {
     const { ocrCalls } = await selectFrom({ maxFrames: 60, useOcr: true });
-    expect(ocrCalls[0]).toBeLessThanOrEqual(24);
+    expect(ocrCalls[0]).toBeLessThanOrEqual(12);
   }, 180_000);
 
   it('skips OCR entirely when its weight is zero', async () => {
@@ -78,6 +78,23 @@ describe('OCR scoring cost', () => {
   it('skips OCR when the caller opts out', async () => {
     const { ocrCalls } = await selectFrom({ maxFrames: 6, useOcr: false });
     expect(ocrCalls).toEqual([]);
+  }, 180_000);
+
+  /**
+   * The bug the shortlist introduced, and the reason this file exists twice
+   * over: the shortlist was passed on as the SELECTION pool, so `maxFrames: 20`
+   * came back with six frames — the shortlist is itself de-duplicated, and
+   * selection could not see past it. Scoring narrows what gets read; only the
+   * budget decides how many frames come out.
+   */
+  it('does not let the OCR shortlist cap how many frames are returned', async () => {
+    const withOcr = await selectFrom({ maxFrames: 20, useOcr: true });
+    const withoutOcr = await selectFrom({ maxFrames: 20, useOcr: false });
+
+    // Whatever the clip supports, enabling OCR must not reduce it.
+    expect(withOcr.frames).toBe(withoutOcr.frames);
+    // ...and the shortlist really was smaller than the result, or this proves nothing.
+    expect(withOcr.ocrCalls[0]).toBeLessThan(withOcr.frames + 1);
   }, 180_000);
 
   /**
