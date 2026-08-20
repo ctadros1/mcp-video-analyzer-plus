@@ -672,9 +672,9 @@ Whisper transcripts of **local files** are cached in the per-user cache director
 | call | time | |
 |---|---|---|
 | `get_transcript` | **43s** | transcribes and caches |
-| `export_video_bundle` | **82s** | reuses the transcript; the remaining cost is frame extraction and OCR |
+| `export_video_bundle` | **31s** | reuses the transcript |
 
-versus ~125s in a single call. Neither half is instant — splitting the work does not make it faster, it makes each call shorter.
+versus ~125s in a single call. Splitting the work does not make it faster — the total is the same — it makes each call shorter, which is what decides whether a client gives up waiting.
 
 The entry is keyed on the file's `mtime:size` as well as its path, so editing or replacing the video invalidates it rather than serving the transcript of whatever used to have that name. The transcription options are in the key too — a different model or forced language is a different transcript — as are the `WHISPER_*` environment settings, so changing the backend invalidates rather than serving a stale result.
 
@@ -779,6 +779,19 @@ After frame extraction, the pipeline automatically applies:
 The OCR step requires `tesseract.js` (included as a dependency). If it fails to load, analysis continues without OCR — no frames or transcript are lost. OCR preprocessing is on by default; set `MCP_OCR_PREPROCESS=0` to OCR the raw frames instead.
 
 OCR always reads the **full-resolution** frame, not the copy emitted to the client. The two have different jobs: the emitted frame is capped for token cost, while recognition needs every pixel it can get.
+
+### OCR in exports
+
+**`export_video_bundle` does not run OCR by default**, while `analyze_video` does. The asymmetry is the same one that governs frame size.
+
+Inline, a model cannot read pixels it was not given, so recognized text is the only route by which small on-screen writing reaches it. In an archive the frames are full-resolution images a person opens and reads directly, so machine-reading them adds a section to `transcript.md` and little else — for the dominant share of the run time. Measured on an 8:23 1080p video with the transcript already cached:
+
+| export | time |
+|---|---|
+| OCR off *(default)* | **31s** |
+| OCR on (`includeOcr: true`) | **80s** |
+
+Pass `includeOcr: true` (CLI `--ocr`) to get the on-screen-text section and the OCR-annotated timeline in the bundle. The option works on every analysis tool — `includeOcr: false` also strips OCR from `analyze_video`, where it is the cheapest way to shorten a long call. CLI: `--ocr` / `--no-ocr`.
 
 ### Frame quality
 

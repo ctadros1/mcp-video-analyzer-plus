@@ -156,6 +156,7 @@ describe('cache key covers every result-defining param', () => {
     frameCandidateMultiplier: { frameCandidateMultiplier: 5 },
     frameOcrWeight: { frameOcrWeight: 0.9 },
     frameQuality: { frameQuality: 95 },
+    includeOcr: { includeOcr: false },
   } satisfies Record<keyof ResultDefiningParams, NonNullable<AnalyzeOptions>>;
 
   /**

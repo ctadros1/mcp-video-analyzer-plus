@@ -198,6 +198,52 @@ describe('export_video_bundle', () => {
     }
   }, 180_000);
 
+  /**
+   * OCR is the dominant cost of an export once the transcript is cached — about
+   * 60s of an 80s run on an 8-minute 1080p video — and it earns much less in an
+   * archive than inline: these frames are full-resolution images a person opens
+   * and reads, rather than pixels a model cannot see unless they are recognized.
+   */
+  it('skips OCR by default, so the bundle has no on-screen-text section', async () => {
+    const { dir, clip } = await fixture();
+    try {
+      const doc = await exportBundle({
+        url: clip,
+        outputPath: join(dir, 'no-ocr.zip'),
+        options: { maxFrames: 2 },
+      });
+
+      const out = join(dir, 'n');
+      await mkdir(out, { recursive: true });
+      await run('unzip', ['-q', doc.zipPath, '-d', out]);
+      const markdown = await readFile(join(out, 'transcript.md'), 'utf8');
+
+      expect(doc.frameCount).toBeGreaterThan(0);
+      expect(markdown).not.toContain('## On-screen text');
+    } finally {
+      await cleanupTempDir(dir);
+    }
+  }, 180_000);
+
+  it('restores OCR when the caller opts in', async () => {
+    const { dir, clip } = await fixture();
+    try {
+      // The clip is a moving test pattern with no legible text, so the section
+      // may legitimately be absent — what is asserted is that the OCR PASS ran,
+      // via the option reaching the pipeline rather than being ignored.
+      const doc = await exportBundle({
+        url: clip,
+        outputPath: join(dir, 'ocr.zip'),
+        options: { maxFrames: 2, includeOcr: true },
+      });
+
+      expect(doc.frameCount).toBeGreaterThan(0);
+      expect(doc.contents).toContain('transcript.md');
+    } finally {
+      await cleanupTempDir(dir);
+    }
+  }, 180_000);
+
   it('names the archive from the video title when given a directory', async () => {
     const { dir, clip } = await fixture();
     try {

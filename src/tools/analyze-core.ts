@@ -86,6 +86,12 @@ export const AnalyzeOptionsSchema = z
       .optional()
       .describe('Skip frame extraction (transcript + metadata only)'),
     maxWidth: maxWidthParam,
+    includeOcr: z
+      .boolean()
+      .optional()
+      .describe(
+        'Run OCR over the selected frames to extract on-screen text (default: on at "standard" and "detailed", off at "brief"). OCR is the dominant cost of an analysis once transcription is cached — roughly 60s of an 80s run on an 8-minute 1080p video — so turn it off when you only need frames and speech.',
+      ),
     frameQuality: z
       .number()
       .int()
@@ -172,6 +178,8 @@ export interface AnalyzeParams {
   /** `undefined` = fall back to MCP_FRAME_JPEG_QUALITY, then the 70 default. */
   frameQuality: number | undefined;
   ocrLanguage: string;
+  /** Resolved from the detail level unless the caller overrode it. */
+  includeOcr: boolean;
   forceRefresh: boolean;
   frameSelection: FrameSelectionMode;
   /** `undefined` = the frame-selector's own default. Smart selection only. */
@@ -197,6 +205,7 @@ export function resolveAnalyzeParams(options: AnalyzeOptions): AnalyzeParams {
     maxWidth: options?.maxWidth,
     frameQuality: options?.frameQuality,
     ocrLanguage: options?.ocrLanguage ?? 'eng+por',
+    includeOcr: options?.includeOcr ?? config.includeOcr,
     forceRefresh: options?.forceRefresh ?? false,
     frameSelection: options?.frameSelection ?? 'smart',
     frameCandidateMultiplier: options?.frameCandidateMultiplier,
@@ -227,6 +236,13 @@ function resultDefiningParams(params: AnalyzeParams): ResultDefiningParams {
     // key (and one persisted sidecar shape — pinned in cache.e2e.test.ts).
     skipFrames: params.skipFrames || undefined,
     ocrLanguage: params.ocrLanguage,
+    // Normalized against the detail level's own default, so every call that
+    // did not override it keeps one canonical key — the same rule `skipFrames`
+    // and `maxWidth` follow.
+    includeOcr:
+      params.includeOcr === getDetailConfig(params.detail).includeOcr
+        ? undefined
+        : params.includeOcr,
     model: params.transcribe.model,
     language: params.transcribe.language,
     initialPrompt: params.transcribe.initialPrompt,
@@ -416,7 +432,7 @@ async function runAnalysisPipeline(
                     maxFrames,
                     candidateMultiplier: params.frameCandidateMultiplier,
                     ocrWeight: params.frameOcrWeight,
-                    useOcr: config.includeOcr,
+                    useOcr: params.includeOcr,
                     ocrLanguage,
                   })
                 : extractKeyFrames(downloaded, frameDir, {
@@ -502,7 +518,7 @@ async function runAnalysisPipeline(
         // output in its own right — it just no longer drives a second cut.
         const rededuplicate = frameSelection !== 'smart';
 
-        if (config.includeOcr) {
+        if (params.includeOcr) {
           // OCR every frame BEFORE dedup so frames that differ only by their
           // on-screen text (static-background Reels/Stories) survive instead of
           // being collapsed by a coarse perceptual hash.

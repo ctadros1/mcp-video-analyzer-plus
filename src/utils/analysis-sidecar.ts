@@ -73,6 +73,8 @@ export interface ResultDefiningParams {
   frameOcrWeight?: number;
   /** Effective JPEG quality of the emitted frames. Absent = the 70 default. */
   frameQuality?: number;
+  /** Absent = whatever the detail level decides; present = a caller override. */
+  includeOcr?: boolean;
 }
 
 /**
@@ -105,6 +107,7 @@ export const RESULT_DEFINING_KEYS = [
   'frameCandidateMultiplier',
   'frameOcrWeight',
   'frameQuality',
+  'includeOcr',
 ] as const;
 
 type MustBeNever<T extends never> = T;

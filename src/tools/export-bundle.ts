@@ -10,7 +10,12 @@ import {
   runWithLocalFallback,
   videoUrlParam,
 } from '../utils/source-fallback.js';
-import { BUNDLE_FRAME_DEFAULTS, revealCommand, writeVideoBundle } from '../utils/video-bundle.js';
+import {
+  BUNDLE_FRAME_DEFAULTS,
+  BUNDLE_INCLUDE_OCR,
+  revealCommand,
+  writeVideoBundle,
+} from '../utils/video-bundle.js';
 import { warningReason } from '../utils/warnings.js';
 import { AnalyzeOptionsSchema, getAnalysis, resolveAnalyzeParams } from './analyze-core.js';
 
@@ -51,6 +56,8 @@ Use this when the user asks for the frames/transcript as FILES — "export", "do
 
 Frames are written at the video's SOURCE resolution and near-lossless quality by default, because archived frames never enter the model's context — the 800px/quality-70 defaults that keep analyze_video's token cost down have no purpose here and cost the same time either way. Pass options.maxWidth or options.frameQuality to get a smaller archive.
 
+OCR is OFF by default here, unlike analyze_video. The frames in an archive are full-resolution images a person opens and reads, so recognizing their text adds a section to transcript.md for the dominant share of the run time (~60s of an 80s run on an 8-minute 1080p video). Pass options.includeOcr: true if the user wants the on-screen-text section and the OCR-annotated timeline in the bundle.
+
 Archive layout:
 - frames/001_0-04.jpg, 002_0-11.jpg, … — the extracted key frames, named ordinal-first so the folder lists in chronological order, with the timestamp in each name
 - transcript.md — the transcript with timestamps, plus a header identifying the video and any on-screen (OCR) text
@@ -88,6 +95,7 @@ TIMING — a video with no existing transcript must be transcribed, and that is 
         ...options,
         maxWidth: options?.maxWidth ?? BUNDLE_FRAME_DEFAULTS.maxWidth,
         frameQuality: options?.frameQuality ?? BUNDLE_FRAME_DEFAULTS.frameQuality,
+        includeOcr: options?.includeOcr ?? BUNDLE_INCLUDE_OCR,
       });
 
       if (outputPath !== undefined && !isAbsolute(outputPath)) {

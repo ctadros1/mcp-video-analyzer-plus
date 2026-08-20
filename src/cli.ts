@@ -21,7 +21,11 @@ import {
 import type { ResolvedVideoSource } from './utils/source-fallback.js';
 import { persistentCacheDir } from './utils/temp-files.js';
 import { isVideoSource } from './utils/url-detector.js';
-import { BUNDLE_FRAME_DEFAULTS, writeVideoBundle } from './utils/video-bundle.js';
+import {
+  BUNDLE_FRAME_DEFAULTS,
+  BUNDLE_INCLUDE_OCR,
+  writeVideoBundle,
+} from './utils/video-bundle.js';
 import { warningReason } from './utils/warnings.js';
 
 const CLI_USAGE = `Usage: mcp-video-analyzer analyze <url-or-path> [options]
@@ -62,6 +66,10 @@ Options:
                           or MCP_FRAME_JPEG_QUALITY). Raise it for screen
                           recordings; re-encoding costs the same either way,
                           only the file size changes
+  --ocr / --no-ocr        Force on-screen-text extraction on or off. Default:
+                          on at standard/detailed detail, and OFF for --zip
+                          (archived frames are read by a person, and OCR is the
+                          dominant cost once the transcript is cached)
   --ocr-language <codes>  Tesseract OCR languages (default: eng+por)
   --model <name>          Whisper model override (e.g. small, medium)
   --language <code>       Forced transcription language (e.g. pt)
@@ -107,6 +115,8 @@ export function parseCliArgs(argv: string[]): CliInvocation {
       'frame-candidates': { type: 'string' },
       'frame-ocr-weight': { type: 'string' },
       'frame-quality': { type: 'string' },
+      ocr: { type: 'boolean' },
+      'no-ocr': { type: 'boolean' },
       'local-fallback': { type: 'string' },
       zip: { type: 'string' },
       'ocr-language': { type: 'string' },
@@ -136,6 +146,10 @@ export function parseCliArgs(argv: string[]): CliInvocation {
     raw.frameOcrWeight = Number(values['frame-ocr-weight']);
   }
   if (values['frame-quality'] !== undefined) raw.frameQuality = Number(values['frame-quality']);
+  // --no-ocr wins over --ocr: an explicit disable should never be overridden by
+  // a flag the caller may have left in a script.
+  if (values['no-ocr']) raw.includeOcr = false;
+  else if (values.ocr) raw.includeOcr = true;
   if (values['ocr-language'] !== undefined) raw.ocrLanguage = values['ocr-language'];
   if (values.model !== undefined) raw.model = values.model;
   if (values.language !== undefined) raw.language = values.language;
@@ -272,6 +286,7 @@ export async function runCli(argv: string[]): Promise<number> {
           ...invocation.options,
           maxWidth: invocation.options?.maxWidth ?? BUNDLE_FRAME_DEFAULTS.maxWidth,
           frameQuality: invocation.options?.frameQuality ?? BUNDLE_FRAME_DEFAULTS.frameQuality,
+          includeOcr: invocation.options?.includeOcr ?? BUNDLE_INCLUDE_OCR,
         },
   );
 

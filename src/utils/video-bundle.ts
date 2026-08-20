@@ -27,6 +27,22 @@ const TRANSCRIPT_FILE = 'transcript.md';
 export const BUNDLE_FRAME_DEFAULTS = { maxWidth: 0, frameQuality: 90 } as const;
 
 /**
+ * OCR is off by default for an ARCHIVE, and on by default for an inlined
+ * analysis. The asymmetry is the same one that governs frame size.
+ *
+ * Inline, the model cannot read pixels it was not given, so recognized text is
+ * the only way small on-screen writing reaches it. In an archive the frames are
+ * full-resolution images a person opens and reads directly, so machine-reading
+ * them adds a section to `transcript.md` and little else — for the dominant
+ * share of the run time. Measured on an 8:23 1080p video with the transcript
+ * already cached: ~82s in total, ~60s of it OCR.
+ *
+ * `includeOcr: true` restores it for anyone who wants the on-screen-text
+ * section and the OCR-annotated timeline in the bundle.
+ */
+export const BUNDLE_INCLUDE_OCR = false;
+
+/**
  * Package an analysis as a `.zip`: the key frames under `frames/`, everything
  * that was said in `transcript.md`.
  *
