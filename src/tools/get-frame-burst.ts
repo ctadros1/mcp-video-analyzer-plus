@@ -6,20 +6,20 @@ import { extractBrowserFrames } from '../processors/browser-frame-extractor.js';
 import { extractFrameBurst, parseTimestamp } from '../processors/frame-extractor.js';
 import { optimizeFramesKeepingOriginals } from '../processors/image-optimizer.js';
 import { createProgressReporter } from '../utils/progress.js';
-import { createTempDir } from '../utils/temp-files.js';
-import { isVideoSource, toLocalPath } from '../utils/url-detector.js';
+import {
+  localFallbackPathParam,
+  remoteFailureInWarnings,
+  resolveVideoSource,
+  runWithLocalFallback,
+  videoUrlParam,
+} from '../utils/source-fallback.js';
+import { cleanupTempDir, createTempDir } from '../utils/temp-files.js';
+import { toLocalPath } from '../utils/url-detector.js';
 import { maxWidthParam } from './frame-options.js';
 
 const GetFrameBurstSchema = z.object({
-  url: z
-    .string()
-    .refine(isVideoSource, {
-      message:
-        'Must be a supported video URL (Loom, YouTube, Vimeo, TikTok, Instagram, X/Twitter, Twitch, Dailymotion, Facebook), a direct .mp4/.webm/.mov URL, or an absolute path / file:// URI to a local video file',
-    })
-    .describe(
-      'Video source: Loom share link, platform video URL (YouTube, Vimeo, TikTok, Instagram, X, Twitch, Dailymotion, Facebook), direct .mp4/.webm/.mov URL, or absolute path to a local video file',
-    ),
+  url: videoUrlParam,
+  localFallbackPath: localFallbackPathParam,
   from: z.string().describe('Start timestamp (e.g., "0:15")'),
   to: z.string().describe('End timestamp (e.g., "0:17")'),
   count: z
@@ -56,6 +56,7 @@ Args:
   - from: Start timestamp (e.g., "0:15")
   - to: End timestamp (e.g., "0:17")
   - count: Number of frames (default: 5, max: 30)
+  - localFallbackPath: Optional local copy of the video, used automatically if the remote source is blocked or unreachable (reported in warnings[])
 
 Returns: N images evenly distributed between the from and to timestamps.`,
     parameters: GetFrameBurstSchema,
@@ -68,10 +69,9 @@ Returns: N images evenly distributed between the from and to timestamps.`,
     },
     execute: async (args, { reportProgress }) => {
       const progress = createProgressReporter(reportProgress);
-      const { url, from, to, count, maxWidth } = args;
+      const { from, to, count, maxWidth } = args;
+      const source = resolveVideoSource(args);
       const frameCount = count ?? 5;
-
-      const adapter = getAdapter(url);
 
       // Validate the range up front — malformed timestamps or a backwards range
       // are caller mistakes and THROW (matching analyze_moment and CLAUDE.md),
@@ -93,8 +93,90 @@ Returns: N images evenly distributed between the from and to timestamps.`,
 
       await progress(0, `Starting burst extraction (${from} → ${to})...`);
 
-      const tempDir = await createTempDir();
-      const warnings: string[] = [];
+      const extractFrom = async (url: string) => {
+        const adapter = getAdapter(url);
+        const tempDir = await createTempDir();
+        const warnings: string[] = [];
+
+        // Every exit shares one shape so the fallback runner — and the caller —
+        // read a degraded attempt exactly like a successful one.
+        const zeroFrames = (reason: string) => {
+          warnings.push(reason);
+          return { paths: [] as string[], warnings, tempDir };
+        };
+
+        // Strategy 1: Download video + ffmpeg burst extraction
+        if (adapter.capabilities.videoDownload) {
+          const videoPath = await adapter.downloadVideo(url, tempDir, (w) => warnings.push(w));
+
+          if (videoPath) {
+            await progress(40, 'Video downloaded, extracting burst frames...');
+
+            // Wrap ONLY the extractor: it raises a raw ffmpeg Error (leaking the
+            // command line) on an undecodable clip.
+            let frames;
+            try {
+              frames = await extractFrameBurst(videoPath, tempDir, from, to, frameCount);
+            } catch {
+              return zeroFrames(
+                `The video could not be decoded for this range — it may be corrupt, truncated, or in an unsupported format.`,
+              );
+            }
+
+            if (frames.length === 0) {
+              // ffmpeg ran but produced no files (e.g. the range is past the clip's end).
+              return zeroFrames(`ffmpeg produced no frames between ${from} and ${to}.`);
+            }
+
+            await progress(70, `Extracted ${frames.length} frames, optimizing...`);
+            // Degrade to the raw frames on a sharp/disk failure, but report it —
+            // the analyze tools warn on the identical rejection, and a systemic
+            // failure that only half the tools mention is worse than either rule.
+            const optimized = await optimizeFramesKeepingOriginals(frames, tempDir, {
+              maxWidth,
+              onWarning: (w) => warnings.push(w),
+            });
+
+            return { paths: optimized.frames.map((f) => f.filePath), warnings, tempDir };
+          }
+        }
+
+        // Strategy 2: Browser-based extraction (fallback) — not applicable to
+        // local files (puppeteer.goto() can't load fs paths reliably).
+        if (toLocalPath(url) !== null) {
+          return zeroFrames(
+            'Failed to extract frames from local video. Install ffmpeg or check that the file is a valid video.',
+          );
+        }
+
+        await progress(30, 'Extracting frames via browser fallback...');
+        const interval = (toSeconds - fromSeconds) / Math.max(frameCount - 1, 1);
+        const timestamps = Array.from({ length: frameCount }, (_, i) =>
+          Math.round(fromSeconds + i * interval),
+        );
+
+        const browserFrames = await extractBrowserFrames(url, tempDir, { timestamps }).catch(
+          (e: unknown) => {
+            warnings.push(`Browser extraction failed: ${e instanceof Error ? e.name : 'error'}`);
+            return [];
+          },
+        );
+
+        if (browserFrames.length > 0) {
+          return { paths: browserFrames.map((f) => f.filePath), warnings, tempDir };
+        }
+
+        return zeroFrames(
+          'Failed to extract frames. Install yt-dlp or Chrome/Chromium for frame extraction.',
+        );
+      };
+
+      const outcome = await runWithLocalFallback(source, extractFrom, {
+        remoteFailureIn: (result) => remoteFailureInWarnings(result.warnings),
+        dispose: (result) => cleanupTempDir(result.tempDir),
+      });
+      const { paths, warnings } = outcome.value;
+      if (outcome.warning) warnings.push(outcome.warning);
 
       // Uniform, parseable response: success and degraded (issue #26) paths emit
       // the same JSON text block, plus any image(s).
@@ -102,84 +184,13 @@ Returns: N images evenly distributed between the from and to timestamps.`,
         type: 'text' as const,
         text: JSON.stringify({ frameCount: n, from, to, warnings }, null, 2),
       });
-      const withImages = async (paths: string[]) => {
-        const content: (
-          { type: 'text'; text: string } | Awaited<ReturnType<typeof imageContent>>
-        )[] = [doc(paths.length)];
-        for (const path of paths) content.push(await imageContent({ path }));
-        return { content };
-      };
-      const zeroFrames = (reason: string) => {
-        warnings.push(reason);
-        return { content: [doc(0)] };
-      };
 
-      // Strategy 1: Download video + ffmpeg burst extraction
-      if (adapter.capabilities.videoDownload) {
-        const videoPath = await adapter.downloadVideo(url, tempDir, (w) => warnings.push(w));
+      if (paths.length > 0) await progress(100, 'Burst extraction complete');
 
-        if (videoPath) {
-          await progress(40, 'Video downloaded, extracting burst frames...');
-
-          // Wrap ONLY the extractor: it raises a raw ffmpeg Error (leaking the
-          // command line) on an undecodable clip.
-          let frames;
-          try {
-            frames = await extractFrameBurst(videoPath, tempDir, from, to, frameCount);
-          } catch {
-            return zeroFrames(
-              `The video could not be decoded for this range — it may be corrupt, truncated, or in an unsupported format.`,
-            );
-          }
-
-          if (frames.length === 0) {
-            // ffmpeg ran but produced no files (e.g. the range is past the clip's end).
-            return zeroFrames(`ffmpeg produced no frames between ${from} and ${to}.`);
-          }
-
-          await progress(70, `Extracted ${frames.length} frames, optimizing...`);
-          // Degrade to the raw frames on a sharp/disk failure, but report it —
-          // the analyze tools warn on the identical rejection, and a systemic
-          // failure that only half the tools mention is worse than either rule.
-          const optimized = await optimizeFramesKeepingOriginals(frames, tempDir, {
-            maxWidth,
-            onWarning: (w) => warnings.push(w),
-          });
-
-          await progress(100, 'Burst extraction complete');
-          return withImages(optimized.frames.map((f) => f.filePath));
-        }
-      }
-
-      // Strategy 2: Browser-based extraction (fallback) — not applicable to
-      // local files (puppeteer.goto() can't load fs paths reliably).
-      if (toLocalPath(url) !== null) {
-        return zeroFrames(
-          'Failed to extract frames from local video. Install ffmpeg or check that the file is a valid video.',
-        );
-      }
-
-      await progress(30, 'Extracting frames via browser fallback...');
-      const interval = (toSeconds - fromSeconds) / Math.max(frameCount - 1, 1);
-      const timestamps = Array.from({ length: frameCount }, (_, i) =>
-        Math.round(fromSeconds + i * interval),
-      );
-
-      const browserFrames = await extractBrowserFrames(url, tempDir, { timestamps }).catch(
-        (e: unknown) => {
-          warnings.push(`Browser extraction failed: ${e instanceof Error ? e.name : 'error'}`);
-          return [];
-        },
-      );
-
-      if (browserFrames.length > 0) {
-        await progress(100, 'Burst extraction complete');
-        return withImages(browserFrames.map((f) => f.filePath));
-      }
-
-      return zeroFrames(
-        'Failed to extract frames. Install yt-dlp or Chrome/Chromium for frame extraction.',
-      );
+      const content: ({ type: 'text'; text: string } | Awaited<ReturnType<typeof imageContent>>)[] =
+        [doc(paths.length)];
+      for (const path of paths) content.push(await imageContent({ path }));
+      return { content };
     },
   });
 }

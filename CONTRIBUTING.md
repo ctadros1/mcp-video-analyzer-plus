@@ -8,8 +8,8 @@ Requires **Node.js 22.12+** (set by `puppeteer-core@25`; `sharp@0.35` needs
 ≥20.9 and `vite@8` needs ≥22.12 — see `package.json` `engines`).
 
 ```bash
-git clone https://github.com/guimatheus92/mcp-video-analyzer.git
-cd mcp-video-analyzer
+git clone https://github.com/ctadros1/mcp-video-analyzer-plus.git
+cd mcp-video-analyzer-plus
 npm install
 ```
 

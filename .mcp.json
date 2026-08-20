@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "video-analyzer": {
-      "command": "npx",
-      "args": ["-y", "mcp-video-analyzer@latest"]
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/index.js"]
     }
   }
 }

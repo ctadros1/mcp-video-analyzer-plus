@@ -13,6 +13,12 @@ import {
 } from './tools/analyze-core.js';
 import type { AnalyzeOptions, ProgressReporter } from './tools/analyze-core.js';
 import type { IFrameResult } from './types.js';
+import {
+  remoteFailureInWarnings,
+  resolveVideoSource,
+  runWithLocalFallback,
+} from './utils/source-fallback.js';
+import type { ResolvedVideoSource } from './utils/source-fallback.js';
 import { persistentCacheDir } from './utils/temp-files.js';
 import { isVideoSource } from './utils/url-detector.js';
 import { warningReason } from './utils/warnings.js';
@@ -36,6 +42,21 @@ Options:
                           timeline,aiSummary. Filters the emitted JSON only;
                           use --detail brief to actually skip frame extraction.
   --force-refresh         Bypass cache and re-analyze
+  --frame-selection <m>   smart | sceneChange (default: smart). "smart"
+                          over-samples candidate frames, scores them on
+                          sharpness and on-screen-text density, and keeps a
+                          visually diverse subset; "sceneChange" is the legacy
+                          scene-detector-only path
+  --frame-candidates <n>  Candidates per requested frame in smart mode
+                          (1-6, default: 3; capped at 90 candidates total)
+  --frame-ocr-weight <w>  Share of the smart score carried by on-screen text,
+                          the rest by sharpness (0-1, default: 0.4). Raise for
+                          screen recordings, lower for b-roll
+  --local-fallback <path> Local copy of the video, used automatically if the
+                          remote source is blocked or unreachable. The fallback
+                          and the original remote error are reported in
+                          "warnings". Works with no positional URL too, which
+                          is the same as passing the path directly
   --ocr-language <codes>  Tesseract OCR languages (default: eng+por)
   --model <name>          Whisper model override (e.g. small, medium)
   --language <code>       Forced transcription language (e.g. pt)
@@ -55,6 +76,8 @@ export interface CliInvocation {
   url: string | undefined;
   options: AnalyzeOptions;
   outDir: string | undefined;
+  /** `--local-fallback`: local copy to use if the remote source fails. */
+  localFallbackPath: string | undefined;
   help: boolean;
 }
 
@@ -69,6 +92,10 @@ export function parseCliArgs(argv: string[]): CliInvocation {
       'max-width': { type: 'string' },
       fields: { type: 'string' },
       'force-refresh': { type: 'boolean' },
+      'frame-selection': { type: 'string' },
+      'frame-candidates': { type: 'string' },
+      'frame-ocr-weight': { type: 'string' },
+      'local-fallback': { type: 'string' },
       'ocr-language': { type: 'string' },
       model: { type: 'string' },
       language: { type: 'string' },
@@ -88,6 +115,13 @@ export function parseCliArgs(argv: string[]): CliInvocation {
       .filter(Boolean);
   }
   if (values['force-refresh']) raw.forceRefresh = true;
+  if (values['frame-selection'] !== undefined) raw.frameSelection = values['frame-selection'];
+  if (values['frame-candidates'] !== undefined) {
+    raw.frameCandidateMultiplier = Number(values['frame-candidates']);
+  }
+  if (values['frame-ocr-weight'] !== undefined) {
+    raw.frameOcrWeight = Number(values['frame-ocr-weight']);
+  }
   if (values['ocr-language'] !== undefined) raw.ocrLanguage = values['ocr-language'];
   if (values.model !== undefined) raw.model = values.model;
   if (values.language !== undefined) raw.language = values.language;
@@ -99,6 +133,7 @@ export function parseCliArgs(argv: string[]): CliInvocation {
     url: positionals[0],
     options,
     outDir: values.out,
+    localFallbackPath: values['local-fallback'],
     help: values.help ?? false,
   };
 }
@@ -177,14 +212,32 @@ export async function runCli(argv: string[]): Promise<number> {
 
   // A CLI runs from a known shell cwd, so resolve relative local paths before
   // the gate (the MCP server rejects them — its cwd is unpredictable).
-  let url = invocation.url;
-  if (url && !isAbsolute(url) && !url.includes('://') && existsSync(url)) {
-    url = resolve(url);
-  }
-  if (!url || !isVideoSource(url)) {
+  const absolutize = (value: string | undefined): string | undefined =>
+    value && !isAbsolute(value) && !value.includes('://') && existsSync(value)
+      ? resolve(value)
+      : value;
+
+  const url = absolutize(invocation.url);
+  const localFallbackPath = absolutize(invocation.localFallbackPath);
+
+  if (!url && !localFallbackPath) {
     process.stderr.write(
       'Must be a supported video URL (Loom, YouTube, Vimeo, TikTok, Instagram, X/Twitter, Twitch, Dailymotion, Facebook), a direct .mp4/.webm/.mov URL, or a path / file:// URI to a local video file\n',
     );
+    return 1;
+  }
+  if (url && !isVideoSource(url)) {
+    process.stderr.write(
+      'Must be a supported video URL (Loom, YouTube, Vimeo, TikTok, Instagram, X/Twitter, Twitch, Dailymotion, Facebook), a direct .mp4/.webm/.mov URL, or a path / file:// URI to a local video file\n',
+    );
+    return 1;
+  }
+
+  let source: ResolvedVideoSource;
+  try {
+    source = resolveVideoSource({ url, localFallbackPath });
+  } catch (err) {
+    process.stderr.write(`${formatError(err)}\n`);
     return 1;
   }
 
@@ -194,9 +247,23 @@ export async function runCli(argv: string[]): Promise<number> {
     process.stderr.write(`[${Math.round(percent)}%] ${message ?? ''}\n`);
   };
 
+  const params = resolveAnalyzeParams(invocation.options);
+
   let handle;
+  let servedSource = source.primary;
+  const fallbackWarnings: string[] = [];
   try {
-    handle = await getAnalysis(url, resolveAnalyzeParams(invocation.options), progress);
+    const outcome = await runWithLocalFallback(
+      source,
+      (input) => getAnalysis(input, params, progress),
+      {
+        remoteFailureIn: (analysis) => remoteFailureInWarnings(analysis.result.warnings),
+        dispose: (analysis) => analysis.cleanup(),
+      },
+    );
+    handle = outcome.value;
+    if (outcome.usedFallback && source.fallback) servedSource = source.fallback;
+    if (outcome.warning) fallbackWarnings.push(outcome.warning);
   } catch (err) {
     process.stderr.write(`${formatError(err)}\n`);
     return 1;
@@ -211,7 +278,13 @@ export async function runCli(argv: string[]): Promise<number> {
   const copyWarnings: string[] = [];
   try {
     if (wantFrames && result.frames.length > 0) {
-      const copied = await copyFrames(result.frames, invocation.outDir ?? defaultOutDir(url));
+      const copied = await copyFrames(
+        result.frames,
+        // Keyed on the source that actually SERVED the frames, so a run that
+        // fell back to the local file writes beside the other runs of that
+        // file rather than under the blocked URL's hash.
+        invocation.outDir ?? defaultOutDir(servedSource),
+      );
       frames = copied.frames;
       missing = copied.missing;
       copyWarnings.push(...copied.errors);
@@ -235,7 +308,7 @@ export async function runCli(argv: string[]): Promise<number> {
   const doc = assembleResultDoc(result, fields, {
     missingFrames: missing,
     refreshHint: '--force-refresh',
-    extraWarnings: copyWarnings,
+    extraWarnings: [...fallbackWarnings, ...copyWarnings],
   });
   if (wantFrames) doc.frames = frames;
 

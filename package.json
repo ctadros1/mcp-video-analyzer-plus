@@ -1,19 +1,22 @@
 {
-  "name": "mcp-video-analyzer",
-  "version": "0.10.0",
-  "description": "MCP server for video analysis — extracts transcripts, key frames, OCR text, and metadata from video URLs and local files. Supports Loom, YouTube and other yt-dlp platforms, direct video URLs, and local video files.",
+  "name": "mcp-video-analyzer-plus",
+  "version": "0.1.0",
+  "description": "MCP server for video analysis — extracts transcripts, key frames, OCR text, and metadata from video URLs and local files. Fork of mcp-video-analyzer adding smart frame selection (over-sample, score, select) and automatic URL-to-local-file fallback. Supports Loom, YouTube and other yt-dlp platforms, direct video URLs, and local video files.",
   "author": "guimatheus92",
+  "contributors": [
+    "ctadros1"
+  ],
   "license": "MIT",
-  "homepage": "https://github.com/guimatheus92/mcp-video-analyzer#readme",
+  "homepage": "https://github.com/ctadros1/mcp-video-analyzer-plus#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/guimatheus92/mcp-video-analyzer.git"
+    "url": "https://github.com/ctadros1/mcp-video-analyzer-plus.git"
   },
   "bugs": {
-    "url": "https://github.com/guimatheus92/mcp-video-analyzer/issues"
+    "url": "https://github.com/ctadros1/mcp-video-analyzer-plus/issues"
   },
   "bin": {
-    "mcp-video-analyzer": "./dist/index.js"
+    "mcp-video-analyzer-plus": "./dist/index.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

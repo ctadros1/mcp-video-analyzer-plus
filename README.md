@@ -1,21 +1,25 @@
 <p align="center">
-  <img src="assets/icon.svg" width="88" height="88" alt="mcp-video-analyzer" />
+  <img src="assets/icon.svg" width="88" height="88" alt="mcp-video-analyzer-plus" />
 </p>
 
-<h1 align="center">mcp-video-analyzer</h1>
+<h1 align="center">mcp-video-analyzer-plus</h1>
 
 <p align="center"><em>Turn any video — YouTube, Instagram, TikTok, Loom, X, Vimeo, direct links, local files — into transcripts, key frames, OCR text, and metadata for AI agents.</em></p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/mcp-video-analyzer"><img src="https://img.shields.io/npm/v/mcp-video-analyzer?color=e8468f&labelColor=1e1e2e&logo=npm&logoColor=white" alt="npm" /></a>
-  <a href="https://github.com/guimatheus92/mcp-video-analyzer/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/mcp-video-analyzer?color=8b5cf6&labelColor=1e1e2e" alt="license" /></a>
-  <a href="https://github.com/punkpeye/awesome-mcp-servers#-multimedia-process"><img src="https://img.shields.io/badge/awesome--mcp--servers-listed-ff4d6d?labelColor=1e1e2e" alt="awesome-mcp-servers" /></a>
-  <a href="https://mcpservers.org/servers/guimatheus92/mcp-video-analyzer"><img src="https://img.shields.io/badge/mcpservers.org-listed-38bdf8?labelColor=1e1e2e" alt="mcpservers.org" /></a>
+  <a href="https://github.com/ctadros1/mcp-video-analyzer-plus/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-8b5cf6?labelColor=1e1e2e" alt="license" /></a>
 </p>
 
-<p align="center">
-  <a href="https://glama.ai/mcp/servers/guimatheus92/mcp-video-analyzer"><img width="360" height="190" src="https://glama.ai/mcp/servers/guimatheus92/mcp-video-analyzer/badge" alt="mcp-video-analyzer MCP server" /></a>
-</p>
+> ### Fork of [guimatheus92/mcp-video-analyzer](https://github.com/guimatheus92/mcp-video-analyzer) — added: smart frame selection, URL/file fallback
+>
+> Everything upstream does, plus two changes:
+>
+> 1. **[Smart frame selection](#smart-frame-selection)** — frames are over-sampled, scored (sharpness, on-screen-text density) and selected for diversity, instead of keeping whatever ffmpeg's scene detector fired on. On by default; `frameSelection: "sceneChange"` restores the upstream path.
+> 2. **[URL + local-file fallback](#url--local-file-fallback)** — every video tool accepts an optional `localFallbackPath` and uses it automatically when the remote source is blocked or unreachable (YouTube anti-bot, missing yt-dlp, network failure).
+>
+> Both are additive: existing calls behave as before. Upstream's adapter and extraction code is deliberately left close to original so `git pull upstream main` keeps working — that surface is an active arms race against YouTube and is best tracked, not rewritten.
+>
+> **Not published to npm.** Build it locally (`npm install && npm run build`) and point your MCP client at `dist/index.js` — see [Claude Desktop](#claude-desktop). Original work and continuing credit: [Guilherme Matheus](https://github.com/guimatheus92). MIT licensed, as upstream.
 
 No existing video MCP combines **transcripts + visual frames + metadata** in one tool. This one does — across Loom, the major yt-dlp platforms (YouTube/Vimeo/TikTok/Instagram/X/Twitch/Dailymotion/Facebook), direct video URLs, and local files.
 
@@ -31,16 +35,32 @@ No existing video MCP combines **transcripts + visual frames + metadata** in one
 
 > Without yt-dlp or Chrome, direct URLs and local files still get frames — the bundled `ffmpeg-static` does the extraction, and Loom falls back to its own CDN download. Platform URLs (YouTube etc.) degrade to a clear "install yt-dlp" warning. Transcripts, metadata, and comments never require either.
 
-There are three ways in: the **`/video` plugin** (Claude Code — slash command + MCP server auto-configured), a plain **MCP server** config (any MCP client), or the **portable skill + CLI** (Codex, Cursor, Copilot, and any agent with a shell — no MCP required).
+This fork is **not published to npm**, so every route below runs a local build. Clone and build once:
 
-### Claude Code — `/video` plugin (recommended)
+```bash
+git clone https://github.com/ctadros1/mcp-video-analyzer-plus.git
+cd mcp-video-analyzer-plus
+npm install && npm run build
+```
+
+`npm install` runs `prepare`, which already builds — the explicit `npm run build` is just belt and braces. The result is `dist/index.js`; every config below points at its **absolute** path.
+
+### Claude Code (MCP)
+
+```bash
+claude mcp add video-analyzer -- node /absolute/path/to/mcp-video-analyzer-plus/dist/index.js
+```
+
+Then restart Claude Code or start a new conversation.
+
+### Claude Code — `/video` plugin
 
 ```
-/plugin marketplace add guimatheus92/mcp-video-analyzer
-/plugin install video@mcp-video-analyzer
+/plugin marketplace add ctadros1/mcp-video-analyzer-plus
+/plugin install video@mcp-video-analyzer-plus
 ```
 
-This adds the `/video` slash command **and** auto-registers the MCP server — no `claude mcp add` needed:
+This adds the `/video` slash command **and** auto-registers the MCP server (the bundled `.mcp.json` launches `dist/index.js` from the plugin directory, so the clone must be built):
 
 ```
 /video https://youtu.be/jNQXAC9IVRw what happens at 0:10?
@@ -49,19 +69,7 @@ This adds the `/video` slash command **and** auto-registers the MCP server — n
 
 ### Other agents — Codex, Cursor, Copilot, Gemini CLI, …
 
-```bash
-npx skills add guimatheus92/mcp-video-analyzer
-```
-
-Installs the `video` skill ([Agent Skills](https://github.com/vercel-labs/skills) format) into every agent detected on your machine. Agents without the MCP server configured fall back to the bundled [CLI](#cli-one-shot-no-mcp-client) automatically — zero configuration.
-
-### Claude Code (MCP only)
-
-```bash
-claude mcp add video-analyzer -- npx mcp-video-analyzer@latest
-```
-
-Then restart Claude Code or start a new conversation.
+`npx skills add` installs from a published package, which this fork is not. Register the MCP server directly (below), or invoke the built CLI from any shell — the [CLI](#cli-one-shot-no-mcp-client) needs no MCP client at all.
 
 ### VS Code / Cursor
 
@@ -73,10 +81,10 @@ Add to your MCP settings file:
 ```json
 {
   "servers": {
-    "mcp-video-analyzer": {
+    "mcp-video-analyzer-plus": {
       "type": "stdio",
-      "command": "npx",
-      "args": ["mcp-video-analyzer@latest"]
+      "command": "node",
+      "args": ["/absolute/path/to/mcp-video-analyzer-plus/dist/index.js"]
     }
   }
 }
@@ -95,12 +103,16 @@ Add to your Claude Desktop config file:
 {
   "mcpServers": {
     "video-analyzer": {
-      "command": "npx",
-      "args": ["mcp-video-analyzer@latest"]
+      "command": "node",
+      "args": ["/absolute/path/to/mcp-video-analyzer-plus/dist/index.js"]
     }
   }
 }
 ```
+
+Replace the path with your clone. It must be **absolute** — Claude Desktop does not run the server from a predictable working directory — and it must point at the built `dist/index.js`, not `src/`. Rebuild (`npm run build`) after pulling changes; the server is loaded once at startup, so restart Claude Desktop afterwards.
+
+If you also have the upstream package configured under the same server name, remove it or rename one of the two — otherwise which server answers is a coin toss.
 
 Then restart Claude Desktop.
 
@@ -109,10 +121,10 @@ Then restart Claude Desktop.
 The same engine is exposed as a one-shot command — this is what the `video` skill uses on agents without MCP, and it works standalone in any terminal:
 
 ```bash
-npx -y mcp-video-analyzer@latest analyze "https://youtu.be/jNQXAC9IVRw"
+node /absolute/path/to/mcp-video-analyzer-plus/dist/index.js analyze "https://youtu.be/jNQXAC9IVRw"
 ```
 
-stdout is a single JSON document — `metadata`, `transcript`, `ocrResults`, `timeline`, `warnings`, `frameCount`, and `frames` as `{ time, filePath, mimeType }` entries pointing at JPEG key frames copied to `--out` (default: the per-user cache dir — `%LOCALAPPDATA%` on Windows, `~/Library/Caches` on macOS, `$XDG_CACHE_HOME` or `~/.cache` on Linux — under `mcp-video-analyzer/<url-hash>/`; set `MCP_CACHE_DIR` to an absolute path to relocate it). Unlike the temp dir this used to live in, nothing reaps that location, so frames persist until you delete them — the directories are created `0700`. Progress streams on stderr, so `stdout` can be piped straight into a JSON parser. Partial failures land in `warnings` with exit code 0; only hard failures exit 1.
+stdout is a single JSON document — `metadata`, `transcript`, `ocrResults`, `timeline`, `warnings`, `frameCount`, and `frames` as `{ time, filePath, mimeType }` entries pointing at JPEG key frames copied to `--out` (default: the per-user cache dir — `%LOCALAPPDATA%` on Windows, `~/Library/Caches` on macOS, `$XDG_CACHE_HOME` or `~/.cache` on Linux — under `mcp-video-analyzer/<source-hash>/`; set `MCP_CACHE_DIR` to an absolute path to relocate it). Unlike the temp dir this used to live in, nothing reaps that location, so frames persist until you delete them — the directories are created `0700`. Progress streams on stderr, so `stdout` can be piped straight into a JSON parser. Partial failures land in `warnings` with exit code 0; only hard failures exit 1.
 
 | Flag | Description |
 |------|-------------|
@@ -121,11 +133,15 @@ stdout is a single JSON document — `metadata`, `transcript`, `ocrResults`, `ti
 | `--max-width <px>` | Width cap for emitted frames (default `800`, or `MCP_FRAME_MAX_WIDTH`); `0` keeps the source resolution — see [Frame size](#frame-size-dense-ui-captures) |
 | `--fields <list>` | Output filter — comma-separated subset: `metadata,transcript,frames,comments,chapters,ocrResults,timeline,aiSummary`. Filters the emitted JSON only; use `--detail brief` to actually skip download/frame extraction |
 | `--force-refresh` | Bypass the cache and re-analyze |
+| `--frame-selection <mode>` | `smart` (default) or `sceneChange` — see [Smart frame selection](#smart-frame-selection) |
+| `--frame-candidates <n>` | Candidates generated per requested frame in smart mode, 1–6 (default `3`, capped at 90 total) |
+| `--frame-ocr-weight <w>` | Share of the smart score carried by on-screen text, 0–1 (default `0.4`) |
+| `--local-fallback <path>` | Local copy of the video, used automatically if the remote source fails — see [URL + local-file fallback](#url--local-file-fallback). Works with no positional URL too |
 | `--ocr-language <codes>` | Tesseract languages (default `eng+por`) |
 | `--model <name>` / `--language <code>` | Whisper overrides for the transcription fallback |
 | `--out <dir>` | Where frame images are copied |
 
-Run with no arguments (`npx mcp-video-analyzer@latest`) to start the MCP stdio server — the CLI is purely additive.
+Run with no arguments (`node dist/index.js`) to start the MCP stdio server — the CLI is purely additive.
 
 ### Verify it works
 
@@ -141,13 +157,15 @@ Analyze this video: https://www.youtube.com/watch?v=jNQXAC9IVRw
 
 Eight tools — the AI picks the cheapest one for the job and calls it automatically. Click any tool to expand its parameters and examples.
 
+All seven single-video tools (everything except the batch `analyze_videos`) accept an optional **`localFallbackPath`** alongside `url`, and use it automatically when the remote source is blocked or unreachable — see [URL + local-file fallback](#url--local-file-fallback).
+
 | Tool | What it does |
 |------|--------------|
 | **`analyze_video`** | Full analysis: transcript + key frames + OCR + timeline + metadata |
 | **`analyze_videos`** | Batch version, one structured result per source (resumable) |
 | **`get_transcript`** | Transcript only (native captions or Whisper fallback) |
 | **`get_metadata`** | Metadata + comments + chapters, no download |
-| **`get_frames`** | Key frames only (scene-change or dense 1 fps) |
+| **`get_frames`** | Key frames only (smart selection, scene-change, or dense 1 fps) |
 | **`analyze_moment`** | Deep-dive on a time range (burst frames + transcript + OCR) |
 | **`get_frame_at`** | Single frame at a timestamp |
 | **`get_frame_burst`** | N frames across a narrow window (motion/animation) |
@@ -165,7 +183,7 @@ Extracts everything from a video URL in one call:
 
 Returns:
 - **Transcript** with timestamps and speakers
-- **Key frames** extracted via scene-change detection (automatically deduplicated). For static clips with no scene cuts — e.g. talking-head Reels/Stories where only an on-screen text overlay changes — it automatically falls back to uniform temporal sampling so you still get frames (and OCR) instead of an empty result.
+- **Key frames** chosen by [smart selection](#smart-frame-selection): candidates are over-sampled from scene cuts *and* uniform sampling, scored on sharpness and on-screen-text density, then kept only if distinct from every frame already selected. Blurred transition frames are rejected, look-alikes far apart in time are not both kept, and passages that change gradually still produce frames instead of an empty result.
 - **OCR text** extracted from frames (code, error messages, UI text, prices/dates/CTAs visible on screen)
 - **Annotated timeline** merging transcript + frames + OCR into a unified "what happened when" view
 - **Metadata** (title, duration, platform)
@@ -178,7 +196,11 @@ Options:
 - `detail` — analysis depth: `"brief"` (metadata + truncated transcript, no frames), `"standard"` (default), `"detailed"` (dense sampling, more frames)
 - `fields` — array of specific fields to return, e.g. `["metadata", "transcript"]`. Available: `metadata`, `transcript`, `frames`, `comments`, `chapters`, `ocrResults`, `timeline`, `aiSummary`
 - `maxFrames` (1-60) — cap on extracted frames. Default scales with video duration at `standard` detail (~12 for ≤30s up to 60 for >10min); fixed 60 at `detailed`, 0 at `brief`. An explicit value always wins
-- `threshold` (0.0-1.0, default 0.1) — scene-change sensitivity
+- `threshold` (0.0-1.0, default 0.1) — scene-change sensitivity. In smart mode this seeds candidate generation at a relaxed fraction of the value
+- `frameSelection` — `"smart"` (default) or `"sceneChange"` (upstream behaviour). See [Smart frame selection](#smart-frame-selection)
+- `frameCandidateMultiplier` (1-6, default 3) — candidates generated per requested frame in smart mode
+- `frameOcrWeight` (0-1, default 0.4) — share of the smart score carried by on-screen text; the rest is sharpness
+- `localFallbackPath` — absolute path to a local copy, used automatically if the remote source fails. See [URL + local-file fallback](#url--local-file-fallback)
 - `forceRefresh` — bypass cache and re-analyze
 - `skipFrames` — skip frame extraction for transcript-only analysis
 - `model` / `language` / `initialPrompt` — per-call Whisper overrides for the transcription fallback (override `WHISPER_MODEL` / `WHISPER_LANGUAGE` / `WHISPER_PROMPT` for this call only — pick a heavier model or a domain glossary for one hard clip without restarting the server)
@@ -207,7 +229,7 @@ Runs `analyze_video` over a list of `sources` with a `concurrency` limit (defaul
 > Get the transcript from this video
 ```
 
-Quick transcript extraction. Falls back to Whisper transcription when no native transcript is available. Accepts the same per-call `model` / `language` / `initialPrompt` overrides as `analyze_video`.
+Quick transcript extraction. Falls back to Whisper transcription when no native transcript is available. Accepts the same per-call `model` / `language` / `initialPrompt` overrides as `analyze_video`, plus `localFallbackPath`.
 
 </details>
 
@@ -233,9 +255,14 @@ Returns metadata, comments, chapters, and AI summary without downloading the vid
 > Extract frames from this video with dense sampling
 ```
 
-Two modes:
-- **Scene-change detection** (default) — captures visual transitions
-- **Dense sampling** (`dense: true`) — 1 frame/sec for full coverage
+Three modes:
+- **Smart selection** (default) — over-samples candidates, scores them on sharpness, and keeps a visually diverse subset. This tool does not run OCR, so the on-screen-text signal is not part of the score here; use `analyze_video` when that matters
+- **Scene-change detection** (`frameSelection: "sceneChange"`) — upstream behaviour, captures visual transitions
+- **Dense sampling** (`dense: true`) — 1 frame/sec for full coverage; takes precedence over `frameSelection`
+
+The `mode` field of the response reports which one ran: `"smart"`, `"scene"`, or `"dense"`.
+
+Options: `maxFrames` (default 20), `threshold`, `dense`, `frameSelection`, `maxWidth`, and `localFallbackPath`.
 
 </details>
 
@@ -384,10 +411,85 @@ Frame extraction uses a two-strategy fallback chain — no single dependency is 
 
 | Strategy | How it works | Speed | Requirements |
 |----------|-------------|-------|-------------|
-| **yt-dlp + ffmpeg** (primary) | Downloads video, extracts frames via scene detection | Fast, precise | [yt-dlp](https://github.com/yt-dlp/yt-dlp) (`pip install yt-dlp`) |
+| **yt-dlp + ffmpeg** (primary) | Downloads video, then over-samples and selects frames ([smart selection](#smart-frame-selection)) | Fast, precise | [yt-dlp](https://github.com/yt-dlp/yt-dlp) (`pip install yt-dlp`) |
 | **Browser** (fallback) | Opens video in headless Chrome, seeks to timestamps, takes screenshots | Slower, no download needed | Chrome or Chromium installed |
 
-The fallback is automatic — if yt-dlp is not available, the server tries browser-based extraction via `puppeteer-core`. If neither is available, analysis still returns transcript + metadata + comments, just no frames.
+The fallback is automatic — if yt-dlp is not available, the server tries browser-based extraction via `puppeteer-core`. If neither is available, analysis still returns transcript + metadata + comments, just no frames. A third route exists when you have the file locally: pass [`localFallbackPath`](#url--local-file-fallback) and a blocked remote source is retried against it automatically.
+
+### Smart frame selection
+
+Upstream picks frames by asking ffmpeg's scene detector where the pixels changed a lot, then drops a frame if it looks like the one immediately before it. That has three failure modes, all of them visible in practice:
+
+- a hard cut fires mid-transition, so the frame you get is **motion-blurred**;
+- two near-identical frames both survive when they are **not adjacent** in the sequence, because deduplication only ever compares neighbours;
+- a passage that changes **gradually** — a scrolling document, a dashboard redrawing, a slide fading — never crosses the threshold and produces **no frames at all**.
+
+Smart selection replaces "keep what fired" with over-sample → score → select. It is the default; nothing needs to be passed to get it.
+
+**1. Over-sample.** Candidates come from two sources, merged: the scene detector at a much lower threshold (40% of yours, floor 0.02), and uniform temporal sampling. Neither alone is enough — scene cuts miss gradual passages, uniform sampling lands mid-transition on hard cuts. The pool is `maxFrames × frameCandidateMultiplier` (default 3), capped at 90 candidates.
+
+**2. Score.** Each candidate gets a combined score from two signals, both normalized against the pool's own maximum:
+
+| Signal | How | Weight |
+|--------|-----|--------|
+| **Sharpness** | Laplacian variance, computed with `sharp` at a fixed 320 px width. Blur and dissolve frames smear out the edges that produce a high variance, so they sink. | `1 − frameOcrWeight` |
+| **On-screen text** | `log1p(characters) × confidence` from the OCR pass (tesseract.js, already a dependency). | `frameOcrWeight` (default `0.4`) |
+
+Normalizing against the pool maximum is what keeps the text signal from punishing b-roll: on a clip where nothing is legible, every candidate scores zero for text and sharpness alone decides the ranking. The weight is configurable — raise it for screen recordings and slide decks, set it to `0` to rank on sharpness alone.
+
+**3. Select.** Greedy, highest score first, keeping a candidate only if it is distinct from **every** frame already kept — not merely from the previous one. Distinctness needs all three of these to agree before two frames count as the same:
+
+- **On-screen text** — different legible text means different information, whatever the pixels say. (The same rule upstream's text-aware dedup already applies to overlay-only clips.)
+- **Perceptual hash** — the dHash + Hamming distance from `frame-dedup.ts`, applied pairwise across the whole pool.
+- **Mean colour** — because dHash greyscales the frame and compares each pixel to its right neighbour, so it encodes gradient and discards colour entirely: solid red, blue and green cards hash *identically*. Mean colour is the cheap signal that covers exactly that blind spot, from the `sharp` stats call the black-frame filter already makes.
+
+A second pass relaxes the temporal-spacing preference (never the distinctness rule) if the first pass came up short, so a clip whose content is bunched into one passage still fills the budget.
+
+> The hash is the weakest of the three and could not carry the decision alone. Measured across this repo's own fixtures, dHash spans almost no range: a 30-second moving clip tops out at 5–6 differing bits of 72, and clips whose on-screen text changes top out at 1–2. Using it at upstream's threshold of 5 as a global gate kept **one** frame out of thirty.
+
+**Options** (`analyze_video`, `analyze_videos`; `frameSelection` also on `get_frames`):
+
+| Option | Default | Meaning |
+|--------|---------|---------|
+| `frameSelection` | `"smart"` | `"sceneChange"` restores the upstream path — scene detector only, adjacent-frame dedup. Faster, no scoring. |
+| `frameCandidateMultiplier` | `3` | Candidates generated per requested frame (1–6), capped at 90 total. Higher = better selection, slower. |
+| `frameOcrWeight` | `0.4` | Share of the score carried by on-screen text; the rest is sharpness. |
+
+**Cost.** OCR is what selection costs, and it is bounded: at most 60 candidates are scored with it (beyond that the signal is dropped and a warning says so), and in `analyze_video` the results are **reused** by the pipeline's own OCR step rather than recomputed — so the selected frames are recognized once, not twice. `get_frames` has never run OCR and still doesn't: its smart mode scores on sharpness and diversity only, which keeps it the fast tool. Use `analyze_video` when the on-screen-text signal matters.
+
+`get_frames` reports which selector ran in its `mode` field: `"smart"`, `"scene"`, or `"dense"` (an explicit `dense: true` still wins — asking for uniform coverage gets uniform coverage).
+
+### URL + local-file fallback
+
+YouTube's anti-bot enforcement blocks unauthenticated `yt-dlp` requests to specific videos intermittently and unpredictably — the same command can succeed and then fail minutes later on the same machine ([yt-dlp#12482](https://github.com/yt-dlp/yt-dlp/issues/12482)). Upstream reports the error and stops; recovering means downloading the video by hand and re-running against a local path.
+
+Every video tool — `analyze_video`, `get_transcript`, `get_metadata`, `get_frames`, `analyze_moment`, `get_frame_at`, `get_frame_burst` — now takes an optional `localFallbackPath` alongside `url`:
+
+```jsonc
+{
+  "url": "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+  "localFallbackPath": "/Users/me/Movies/jNQXAC9IVRw.mp4"
+}
+```
+
+The remote source is tried first. If it fails **in a way a local copy can fix**, the same operation is retried against the file, and the response carries a warning naming the original remote error:
+
+```
+Remote extraction failed (Video download failed: ERROR: [youtube] …: Sign in to confirm you
+are not a bot.) — served this result from localFallbackPath instead.
+```
+
+Never silent: the warning is how you know which source actually answered.
+
+- **`url` alone** — unchanged from upstream in every respect.
+- **`localFallbackPath` alone** — `url` becomes optional; the local file is read directly with no remote attempt, identical to passing that path as `url`.
+- **Neither** — a `UserError`; a source is required.
+
+What counts as "a local copy can fix it": a failed or blocked download, missing yt-dlp, an unusable cookie source, a 4xx/5xx, a DNS or timeout error, a metadata/transcript fetch that failed, or an extraction that produced no frames. What does **not**: an invalid timestamp, a backwards time range, an unsupported URL, a comments fetch that 404'd (a local file has no comments either), or a video that simply has no transcript. Those are reported as themselves rather than retried against a different file — retrying a mistake in the call would only bury the real error under a second copy of it.
+
+The fallback covers both shapes of failure this codebase produces: a thrown error, and — more commonly — a *successful* call that degraded around the failure and explained itself in `warnings[]`. Watching only for exceptions would miss the case it exists for.
+
+CLI equivalent: `--local-fallback <path>`. Not wired into the batch `analyze_videos`, which takes a list of URLs and has no per-item place to put a path.
 
 ### Post-Processing Pipeline
 
@@ -395,7 +497,7 @@ After frame extraction, the pipeline automatically applies:
 
 | Step | What it does | Why |
 |------|-------------|-----|
-| **Frame deduplication** | Removes near-identical consecutive frames using perceptual hashing (dHash + Hamming distance) | Screencasts often have long static moments — dedup removes redundant frames, saving tokens |
+| **Frame deduplication** | Removes near-identical consecutive frames using perceptual hashing (dHash + Hamming distance). Runs after [smart selection](#smart-frame-selection), which has already enforced pairwise distinctness across the whole candidate pool. | Screencasts often have long static moments — dedup removes redundant frames, saving tokens |
 | **OCR** | Extracts text visible on screen from each frame (via tesseract.js). Each frame is first preprocessed — grayscale + 2× upscale + contrast normalization + sharpen — which materially improves accuracy on stylized overlays (prices, dates, coupons, CTAs). | Captures code, error messages, terminal output, UI text that the transcript doesn't cover |
 | **Annotated timeline** | Merges transcript timestamps + frame timestamps + OCR text into a single chronological view | Gives the AI a unified "what was said, what changed visually, and what text appeared" at each moment |
 

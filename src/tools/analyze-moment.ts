@@ -8,21 +8,20 @@ import { extractFrameBurst, parseTimestamp } from '../processors/frame-extractor
 import { extractTextFromFrames } from '../processors/frame-ocr.js';
 import { ocrSourceFrames, optimizeFramesKeepingOriginals } from '../processors/image-optimizer.js';
 import { createProgressReporter } from '../utils/progress.js';
-import { createTempDir } from '../utils/temp-files.js';
-import { isVideoSource } from '../utils/url-detector.js';
+import {
+  localFallbackPathParam,
+  remoteFailureInWarnings,
+  resolveVideoSource,
+  runWithLocalFallback,
+  videoUrlParam,
+} from '../utils/source-fallback.js';
+import { cleanupTempDir, createTempDir } from '../utils/temp-files.js';
 import { warningReason } from '../utils/warnings.js';
 import { maxWidthParam } from './frame-options.js';
 
 const AnalyzeMomentSchema = z.object({
-  url: z
-    .string()
-    .refine(isVideoSource, {
-      message:
-        'Must be a supported video URL (Loom, YouTube, Vimeo, TikTok, Instagram, X/Twitter, Twitch, Dailymotion, Facebook), a direct .mp4/.webm/.mov URL, or an absolute path / file:// URI to a local video file',
-    })
-    .describe(
-      'Video source: Loom share link, platform video URL (YouTube, Vimeo, TikTok, Instagram, X, Twitch, Dailymotion, Facebook), direct .mp4/.webm/.mov URL, or absolute path to a local video file',
-    ),
+  url: videoUrlParam,
+  localFallbackPath: localFallbackPathParam,
   from: z.string().describe('Start timestamp (e.g., "1:30")'),
   to: z.string().describe('End timestamp (e.g., "2:00")'),
   count: z
@@ -56,7 +55,9 @@ Use this when you need to understand exactly what happens between two timestamps
 
 Example: analyze_moment(url, "1:30", "2:00", 10) → 10 frames + transcript + OCR for that 30s window
 
-Supports: Loom (loom.com/share/...), YouTube/Vimeo/TikTok/Instagram/X/Twitch/Dailymotion/Facebook (requires yt-dlp), direct video URLs (.mp4, .webm, .mov), and local video files (absolute path or file:// URI).`,
+Supports: Loom (loom.com/share/...), YouTube/Vimeo/TikTok/Instagram/X/Twitch/Dailymotion/Facebook (requires yt-dlp), direct video URLs (.mp4, .webm, .mov), and local video files (absolute path or file:// URI).
+
+Pass localFallbackPath alongside url to fall back to a local copy of the video when the remote source is blocked or unreachable; the fallback is reported in warnings[].`,
     parameters: AnalyzeMomentSchema,
     annotations: {
       title: 'Analyze Moment',
@@ -67,7 +68,8 @@ Supports: Loom (loom.com/share/...), YouTube/Vimeo/TikTok/Instagram/X/Twitch/Dai
     },
     execute: async (args, { reportProgress }) => {
       const progress = createProgressReporter(reportProgress);
-      const { url, from, to, maxWidth } = args;
+      const { from, to, maxWidth } = args;
+      const source = resolveVideoSource(args);
       const count = args.count ?? 10;
       const ocrLanguage = args.ocrLanguage ?? 'eng+por';
 
@@ -81,99 +83,120 @@ Supports: Loom (loom.com/share/...), YouTube/Vimeo/TikTok/Instagram/X/Twitch/Dai
         );
       }
 
-      let adapter;
-      try {
-        adapter = getAdapter(url);
-      } catch (error) {
-        if (error instanceof UserError) throw error;
-        throw new UserError(`Failed to detect video platform for URL: ${url}`);
-      }
-
-      const warnings: string[] = [];
-      const tempDir = await createTempDir();
-
       await progress(0, `Starting moment analysis (${from} → ${to})...`);
 
-      // Fetch transcript and filter to time range
-      const fullTranscript = await adapter.getTranscript(url).catch((e: unknown) => {
-        warnings.push(`Failed to fetch transcript: ${warningReason(e)}`);
-        return [];
-      });
+      const analyzeFrom = async (url: string) => {
+        let adapter;
+        try {
+          adapter = getAdapter(url);
+        } catch (error) {
+          if (error instanceof UserError) throw error;
+          throw new UserError(`Failed to detect video platform for URL: ${url}`);
+        }
 
-      const transcriptSegment = fullTranscript.filter((entry) => {
-        const entrySeconds = parseTimestampLoose(entry.time);
-        return entrySeconds !== null && entrySeconds >= fromSeconds && entrySeconds <= toSeconds;
-      });
+        const warnings: string[] = [];
+        const tempDir = await createTempDir();
 
-      await progress(15, 'Transcript filtered to time range');
-
-      // Download video and extract burst frames
-      if (!adapter.capabilities.videoDownload) {
-        throw new UserError(
-          'Moment analysis requires video download capability. Use a direct video URL (.mp4, .webm, .mov).',
-        );
-      }
-
-      const downloadWarnings: string[] = [];
-      const videoPath = await adapter.downloadVideo(url, tempDir, (w) => downloadWarnings.push(w));
-      if (!videoPath) {
-        throw new UserError(
-          ['Failed to download video for moment analysis.', ...downloadWarnings].join(' '),
-        );
-      }
-
-      await progress(35, 'Video downloaded, extracting burst frames...');
-
-      // Degrade like analyze_video rather than throwing: extractFrameBurst
-      // raises a raw ffmpeg Error (which leaks its command line) on a corrupt
-      // or undecodable clip. Catching it keeps the transcript segment already
-      // fetched above, instead of failing the whole moment (issue #26 sibling).
-      const rawFrames = await extractFrameBurst(videoPath, tempDir, from, to, count).catch(
-        (e: unknown) => {
-          warnings.push(
-            `Could not extract frames for this range — the video may be corrupt, truncated, or in an unsupported format (${e instanceof Error ? e.name : 'error'}).`,
-          );
+        // Fetch transcript and filter to time range
+        const fullTranscript = await adapter.getTranscript(url).catch((e: unknown) => {
+          warnings.push(`Failed to fetch transcript: ${warningReason(e)}`);
           return [];
-        },
-      );
+        });
 
-      await progress(55, `Extracted ${rawFrames.length} frames, optimizing...`);
+        const transcriptSegment = fullTranscript.filter((entry) => {
+          const entrySeconds = parseTimestampLoose(entry.time);
+          return entrySeconds !== null && entrySeconds >= fromSeconds && entrySeconds <= toSeconds;
+        });
 
-      // Optimize frames, keeping the mapping back to the full-resolution
-      // originals so OCR below reads those and not the emitted downscale.
-      const optimized = await optimizeFramesKeepingOriginals(rawFrames, tempDir, {
-        maxWidth,
-        onWarning: (w) => warnings.push(w),
-      });
-      const frameOriginals = optimized.originals;
-      let frames = optimized.frames;
+        await progress(15, 'Transcript filtered to time range');
 
-      // Dedup
-      const beforeDedup = frames.length;
-      frames = await deduplicateFrames(frames).catch(() => frames);
-      if (frames.length < beforeDedup) {
-        warnings.push(
-          `Removed ${beforeDedup - frames.length} near-duplicate frames (${beforeDedup} → ${frames.length})`,
+        // Download video and extract burst frames
+        if (!adapter.capabilities.videoDownload) {
+          throw new UserError(
+            'Moment analysis requires video download capability. Use a direct video URL (.mp4, .webm, .mov).',
+          );
+        }
+
+        const downloadWarnings: string[] = [];
+        const videoPath = await adapter.downloadVideo(url, tempDir, (w) =>
+          downloadWarnings.push(w),
         );
-      }
+        if (!videoPath) {
+          // Still a throw, as before — but now one the fallback runner
+          // recognizes as a remote failure, so a localFallbackPath retries here
+          // instead of the caller seeing only the yt-dlp error.
+          throw new UserError(
+            ['Failed to download video for moment analysis.', ...downloadWarnings].join(' '),
+          );
+        }
+        warnings.push(...downloadWarnings);
 
-      await progress(70, 'Filtering and deduplicating frames...');
+        await progress(35, 'Video downloaded, extracting burst frames...');
 
-      // OCR
-      await progress(75, `Running OCR on ${frames.length} frames...`);
-      const ocrSource = ocrSourceFrames(frames, frameOriginals);
-      const ocrResults = await extractTextFromFrames(ocrSource, ocrLanguage, (completed, total) => {
-        const pct = 75 + Math.round((completed / total) * 15);
-        progress(pct, `OCR: processing frame ${completed}/${total}...`);
-      }).catch((e: unknown) => {
-        warnings.push(`OCR failed: ${warningReason(e)}`);
-        return [];
+        // Degrade like analyze_video rather than throwing: extractFrameBurst
+        // raises a raw ffmpeg Error (which leaks its command line) on a corrupt
+        // or undecodable clip. Catching it keeps the transcript segment already
+        // fetched above, instead of failing the whole moment (issue #26 sibling).
+        const rawFrames = await extractFrameBurst(videoPath, tempDir, from, to, count).catch(
+          (e: unknown) => {
+            warnings.push(
+              `Could not extract frames for this range — the video may be corrupt, truncated, or in an unsupported format (${e instanceof Error ? e.name : 'error'}).`,
+            );
+            return [];
+          },
+        );
+
+        await progress(55, `Extracted ${rawFrames.length} frames, optimizing...`);
+
+        // Optimize frames, keeping the mapping back to the full-resolution
+        // originals so OCR below reads those and not the emitted downscale.
+        const optimized = await optimizeFramesKeepingOriginals(rawFrames, tempDir, {
+          maxWidth,
+          onWarning: (w) => warnings.push(w),
+        });
+        const frameOriginals = optimized.originals;
+        let frames = optimized.frames;
+
+        // Dedup
+        const beforeDedup = frames.length;
+        frames = await deduplicateFrames(frames).catch(() => frames);
+        if (frames.length < beforeDedup) {
+          warnings.push(
+            `Removed ${beforeDedup - frames.length} near-duplicate frames (${beforeDedup} → ${frames.length})`,
+          );
+        }
+
+        await progress(70, 'Filtering and deduplicating frames...');
+
+        // OCR
+        await progress(75, `Running OCR on ${frames.length} frames...`);
+        const ocrSource = ocrSourceFrames(frames, frameOriginals);
+        const ocrResults = await extractTextFromFrames(
+          ocrSource,
+          ocrLanguage,
+          (completed, total) => {
+            const pct = 75 + Math.round((completed / total) * 15);
+            progress(pct, `OCR: processing frame ${completed}/${total}...`);
+          },
+        ).catch((e: unknown) => {
+          warnings.push(`OCR failed: ${warningReason(e)}`);
+          return [];
+        });
+
+        await progress(92, 'Building annotated timeline...');
+
+        // Build mini-timeline for this range
+        const timeline = buildAnnotatedTimeline(transcriptSegment, frames, ocrResults);
+
+        return { transcriptSegment, frames, ocrResults, timeline, warnings, tempDir };
+      };
+
+      const outcome = await runWithLocalFallback(source, analyzeFrom, {
+        remoteFailureIn: (result) => remoteFailureInWarnings(result.warnings),
+        dispose: (result) => cleanupTempDir(result.tempDir),
       });
-
-      await progress(92, 'Building annotated timeline...');
-
-      // Build mini-timeline for this range
-      const timeline = buildAnnotatedTimeline(transcriptSegment, frames, ocrResults);
+      const { transcriptSegment, frames, ocrResults, timeline, warnings } = outcome.value;
+      if (outcome.warning) warnings.push(outcome.warning);
 
       await progress(100, 'Moment analysis complete');
 

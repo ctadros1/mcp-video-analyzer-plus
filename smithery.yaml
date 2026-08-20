@@ -4,4 +4,4 @@ startCommand:
     type: object
     properties: {}
   commandFunction: |-
-    (config) => ({ command: 'npx', args: ['-y', 'mcp-video-analyzer@latest'] })
+    (config) => ({ command: 'npx', args: ['-y', 'mcp-video-analyzer-plus@latest'] })

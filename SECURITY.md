@@ -10,7 +10,7 @@ security fixes. Older versions are not patched — upgrade instead.
 
 Report privately through GitHub, **not** in a public issue:
 
-[**Report a vulnerability**](https://github.com/guimatheus92/mcp-video-analyzer/security/advisories/new)
+[**Report a vulnerability**](https://github.com/ctadros1/mcp-video-analyzer-plus/security/advisories/new)
 (repository → Security → Advisories → *Report a vulnerability*)
 
 Please include the affected version, a reproduction, and the impact you

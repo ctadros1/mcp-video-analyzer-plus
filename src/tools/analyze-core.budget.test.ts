@@ -9,6 +9,11 @@ import { getAnalysis, resolveAnalyzeParams } from './analyze-core.js';
 // their own `?? 20` fallbacks downstream, so reverting the resolveMaxFrames()
 // call site to `params.maxFrames` (undefined by default) would compile cleanly
 // and silently reinstate the fixed budget with every other test still green.
+//
+// BOTH selectors are captured. The budget is resolved once and handed to
+// whichever one `frameSelection` picks, so stubbing only the legacy extractor
+// would leave the DEFAULT path — smart selection — unguarded, and this file
+// would go quietly blind the moment the default changed.
 const state = vi.hoisted(() => ({ capturedMaxFrames: [] as (number | undefined)[] }));
 
 vi.mock('../processors/frame-extractor.js', async (importOriginal) => {
@@ -22,6 +27,21 @@ vi.mock('../processors/frame-extractor.js', async (importOriginal) => {
     ) => {
       state.capturedMaxFrames.push(opts.maxFrames);
       return { frames: [], warnings: [] };
+    },
+  };
+});
+
+vi.mock('../processors/frame-selector.js', async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    selectKeyFrames: async (
+      _videoPath: string,
+      _outputDir: string,
+      opts: { maxFrames?: number },
+    ) => {
+      state.capturedMaxFrames.push(opts.maxFrames);
+      return { frames: [], warnings: [], ocrByPath: new Map() };
     },
   };
 });
@@ -59,33 +79,40 @@ function stubAdapter(duration: number): IVideoAdapter {
   };
 }
 
-async function analyzedBudget(duration: number, maxFrames?: number): Promise<number | undefined> {
+async function analyzedBudget(
+  frameSelection: 'smart' | 'sceneChange',
+  duration: number,
+  maxFrames?: number,
+): Promise<number | undefined> {
   clearAdapters();
   registerAdapter(stubAdapter(duration));
-  const url = `https://budget.test/${duration}-${maxFrames ?? 'default'}`;
-  const { cleanup } = await getAnalysis(url, resolveAnalyzeParams({ maxFrames }));
+  const url = `https://budget.test/${frameSelection}-${duration}-${maxFrames ?? 'default'}`;
+  const { cleanup } = await getAnalysis(url, resolveAnalyzeParams({ maxFrames, frameSelection }));
   await cleanup();
   return state.capturedMaxFrames.at(-1);
 }
 
-describe('duration-adaptive maxFrames wiring through getAnalysis', () => {
-  beforeEach(() => {
-    state.capturedMaxFrames.length = 0;
-  });
+describe.each(['smart', 'sceneChange'] as const)(
+  'duration-adaptive maxFrames wiring through getAnalysis (%s)',
+  (frameSelection) => {
+    beforeEach(() => {
+      state.capturedMaxFrames.length = 0;
+    });
 
-  afterAll(() => {
-    clearAdapters();
-  });
+    afterAll(() => {
+      clearAdapters();
+    });
 
-  it('resolves the adaptive default from the video duration (700s → 60)', async () => {
-    expect(await analyzedBudget(700)).toBe(60);
-  });
+    it('resolves the adaptive default from the video duration (700s → 60)', async () => {
+      expect(await analyzedBudget(frameSelection, 700)).toBe(60);
+    });
 
-  it('resolves the adaptive default for short clips (25s → 12)', async () => {
-    expect(await analyzedBudget(25)).toBe(12);
-  });
+    it('resolves the adaptive default for short clips (25s → 12)', async () => {
+      expect(await analyzedBudget(frameSelection, 25)).toBe(12);
+    });
 
-  it('an explicit maxFrames overrides the adaptive default', async () => {
-    expect(await analyzedBudget(700, 7)).toBe(7);
-  });
-});
+    it('an explicit maxFrames overrides the adaptive default', async () => {
+      expect(await analyzedBudget(frameSelection, 700, 7)).toBe(7);
+    });
+  },
+);

@@ -17,8 +17,11 @@ import {
   formatTimestamp,
   probeVideoDuration,
 } from '../processors/frame-extractor.js';
+import type { KeyFrameExtraction } from '../processors/frame-extractor.js';
 import { isMeaningfulOcr, ocrFrames } from '../processors/frame-ocr.js';
 import type { IOcrResult } from '../processors/frame-ocr.js';
+import { selectKeyFrames } from '../processors/frame-selector.js';
+import type { FrameSelectionMode } from '../processors/frame-selector.js';
 import {
   keyedFrameMaxWidth,
   ocrSourceFrames,
@@ -87,6 +90,28 @@ export const AnalyzeOptionsSchema = z
         'Specific fields to return (default: all). E.g., ["metadata", "transcript"] returns only those fields.',
       ),
     forceRefresh: z.boolean().optional().describe('Bypass cache and re-analyze the video'),
+    frameSelection: z
+      .enum(['smart', 'sceneChange'])
+      .optional()
+      .describe(
+        'How key frames are chosen. "smart" (default) over-samples candidates (scene cuts + uniform sampling), scores them on sharpness and on-screen-text density, and greedily keeps a visually diverse subset. "sceneChange" is the legacy, faster path: whatever the scene detector fired on, deduplicated against the previous frame only.',
+      ),
+    frameCandidateMultiplier: z
+      .number()
+      .min(1)
+      .max(6)
+      .optional()
+      .describe(
+        'Candidates generated per requested frame in "smart" mode (default: 3, capped at 90 candidates total). Higher = better selection, slower.',
+      ),
+    frameOcrWeight: z
+      .number()
+      .min(0)
+      .max(1)
+      .optional()
+      .describe(
+        'Share of the "smart" score carried by on-screen-text density, the rest by sharpness (default: 0.4). Raise it for screen recordings and slide decks; lower it (or 0) for b-roll and talking-head clips.',
+      ),
     ocrLanguage: z
       .string()
       .optional()
@@ -128,6 +153,11 @@ export interface AnalyzeParams {
   maxWidth: number | undefined;
   ocrLanguage: string;
   forceRefresh: boolean;
+  frameSelection: FrameSelectionMode;
+  /** `undefined` = the frame-selector's own default. Smart selection only. */
+  frameCandidateMultiplier: number | undefined;
+  /** `undefined` = the frame-selector's own default. Smart selection only. */
+  frameOcrWeight: number | undefined;
   transcribe: TranscribeOptions;
 }
 
@@ -147,6 +177,9 @@ export function resolveAnalyzeParams(options: AnalyzeOptions): AnalyzeParams {
     maxWidth: options?.maxWidth,
     ocrLanguage: options?.ocrLanguage ?? 'eng+por',
     forceRefresh: options?.forceRefresh ?? false,
+    frameSelection: options?.frameSelection ?? 'smart',
+    frameCandidateMultiplier: options?.frameCandidateMultiplier,
+    frameOcrWeight: options?.frameOcrWeight,
     transcribe: {
       model: options?.model,
       language: options?.language,
@@ -173,6 +206,12 @@ function resultDefiningParams(params: AnalyzeParams): ResultDefiningParams {
     model: params.transcribe.model,
     language: params.transcribe.language,
     initialPrompt: params.transcribe.initialPrompt,
+    // Same normalization rule as `skipFrames` above: the default drops out of
+    // the key so the common call has one canonical shape. Only the legacy mode
+    // and explicitly-tuned weights are written.
+    frameSelection: params.frameSelection === 'sceneChange' ? 'sceneChange' : undefined,
+    frameCandidateMultiplier: params.frameCandidateMultiplier,
+    frameOcrWeight: params.frameOcrWeight,
   };
 }
 
@@ -194,6 +233,30 @@ type _EveryParamClassified = MustBeNever<
 >;
 type _NoStrayKeyField = MustBeNever<Exclude<keyof ResultDefiningParams, ParamLeaves>>;
 
+/**
+ * The OCR results smart selection already computed, realigned to the frames
+ * that survived — or null when they don't cover every frame.
+ *
+ * All-or-nothing on purpose. The caller uses this array index-aligned to
+ * `frames`, so a partial hit would have to be padded with empty entries, and an
+ * empty entry is indistinguishable from "this frame genuinely has no text" —
+ * which is exactly the signal the text-aware dedup reads. Falling back to a
+ * full OCR pass costs time; a silently mis-scored dedup costs frames.
+ */
+function reuseSelectionOcr<T extends { filePath: string }>(
+  frames: T[],
+  selectionOcr: ReadonlyMap<string, IOcrResult>,
+): IOcrResult[] | null {
+  if (selectionOcr.size === 0) return null;
+  const results: IOcrResult[] = [];
+  for (const frame of frames) {
+    const result = selectionOcr.get(frame.filePath);
+    if (!result) return null;
+    results.push(result);
+  }
+  return results;
+}
+
 export type ProgressReporter = (progress: number, message?: string) => Promise<void>;
 
 const noopProgress: ProgressReporter = async () => undefined;
@@ -211,7 +274,7 @@ async function runAnalysisPipeline(
 ): Promise<{ result: IAnalysisResult; transcriptFromWhisper: boolean; tempDir: string | null }> {
   const adapter = getAdapter(url);
   const config = getDetailConfig(params.detail);
-  const { threshold, skipFrames, ocrLanguage } = params;
+  const { threshold, skipFrames, ocrLanguage, frameSelection } = params;
 
   const warnings: string[] = [];
   let tempDir: string | null = null;
@@ -279,6 +342,11 @@ async function runAnalysisPipeline(
       // below reads the original (see optimizeFramesKeepingOriginals).
       let frameOriginals: FrameOriginals = new Map();
 
+      // OCR smart selection already paid for, keyed by the path it ran on —
+      // the same pre-optimization path `ocrSourceFrames` maps back to. Lets the
+      // OCR step below reuse those results instead of recognizing twice.
+      let selectionOcr: ReadonlyMap<string, IOcrResult> = new Map();
+
       // Strategy 1: download (no-op for local files) + ffmpeg frame extraction
       // with scene→uniform-sampling fallback for static clips.
       if (adapter.capabilities.videoDownload) {
@@ -293,12 +361,30 @@ async function runAnalysisPipeline(
             metadata.durationFormatted = formatTimestamp(Math.floor(duration));
           }
 
-          const extraction = await extractKeyFrames(videoPath, tempDir, {
-            threshold,
-            maxFrames: resolveMaxFrames(params.maxFrames, params.detail, metadata.duration),
-            dense: config.denseSampling,
-          });
+          const maxFrames = resolveMaxFrames(params.maxFrames, params.detail, metadata.duration);
+
+          // Smart selection subsumes `dense`: it already samples uniformly as
+          // one of its two candidate sources, so the detailed level's dense
+          // flag only steers the legacy path.
+          const extraction: KeyFrameExtraction & {
+            ocrByPath?: ReadonlyMap<string, IOcrResult>;
+          } =
+            frameSelection === 'smart'
+              ? await selectKeyFrames(videoPath, tempDir, {
+                  threshold,
+                  maxFrames,
+                  candidateMultiplier: params.frameCandidateMultiplier,
+                  ocrWeight: params.frameOcrWeight,
+                  useOcr: config.includeOcr,
+                  ocrLanguage,
+                })
+              : await extractKeyFrames(videoPath, tempDir, {
+                  threshold,
+                  maxFrames,
+                  dense: config.denseSampling,
+                });
           warnings.push(...extraction.warnings);
+          selectionOcr = extraction.ocrByPath ?? selectionOcr;
           const rawFrames = extraction.frames;
 
           await progress(70, `Extracted ${rawFrames.length} frames, optimizing...`);
@@ -363,25 +449,40 @@ async function runAnalysisPipeline(
       if (result.frames.length > 0) {
         const beforeDedup = result.frames.length;
 
+        // Smart selection has ALREADY enforced pairwise distinctness across the
+        // whole candidate pool, with a stricter and better-informed rule than
+        // this step's adjacent-frame hash comparison. Running it anyway is not
+        // merely redundant, it is destructive: `deduplicateFrames`' threshold
+        // of 5 is far above the range dHash actually spans (measured: 5-6 bits
+        // of 72 across a whole moving clip), so it collapsed six deliberately
+        // chosen frames back down to one. OCR still runs — `ocrResults` is
+        // output in its own right — it just no longer drives a second cut.
+        const rededuplicate = frameSelection !== 'smart';
+
         if (config.includeOcr) {
           // OCR every frame BEFORE dedup so frames that differ only by their
           // on-screen text (static-background Reels/Stories) survive instead of
           // being collapsed by a coarse perceptual hash.
           await progress(82, `Running OCR on ${result.frames.length} frames...`);
           const ocrSource = ocrSourceFrames(result.frames, frameOriginals);
-          const perFrame = await ocrFrames(ocrSource, ocrLanguage, (completed, total) => {
-            const pct = 82 + Math.round((completed / total) * 9);
-            void progress(pct, `OCR: processing frame ${completed}/${total}...`);
-          }).catch((e: unknown): IOcrResult[] => {
-            warnings.push(`OCR failed: ${warningReason(e)}`);
-            return [];
-          });
+          const reused = reuseSelectionOcr(ocrSource, selectionOcr);
+          const perFrame =
+            reused ??
+            (await ocrFrames(ocrSource, ocrLanguage, (completed, total) => {
+              const pct = 82 + Math.round((completed / total) * 9);
+              void progress(pct, `OCR: processing frame ${completed}/${total}...`);
+            }).catch((e: unknown): IOcrResult[] => {
+              warnings.push(`OCR failed: ${warningReason(e)}`);
+              return [];
+            }));
 
           if (perFrame.length === result.frames.length) {
             // Only confident text drives the text-aware dedup; low-confidence
             // noise is treated as "no text" so it can't fake a change.
             const texts = perFrame.map((r) => (isMeaningfulOcr(r) ? r.text : ''));
-            const keep = await dedupeKeepingTextChanges(result.frames, texts).catch(() => null);
+            const keep = rededuplicate
+              ? await dedupeKeepingTextChanges(result.frames, texts).catch(() => null)
+              : null;
             if (keep) {
               // Realign frames and OCR by kept index. `ocrResults` is then a
               // *time-keyed, sparse* subset (low-confidence entries dropped), NOT
@@ -398,14 +499,16 @@ async function runAnalysisPipeline(
             // OCR engine unavailable or returned a misaligned result — degrade to
             // visual-only dedup, but say so rather than silently skipping OCR.
             warnings.push(
-              `OCR produced ${perFrame.length}/${result.frames.length} results (tesseract.js unavailable or recognition aborted); used visual-only dedup and skipped OCR text.`,
+              `OCR produced ${perFrame.length}/${result.frames.length} results (tesseract.js unavailable or recognition aborted); skipped OCR text.`,
             );
-            result.frames = await deduplicateFrames(result.frames).catch((e: unknown) => {
-              warnings.push(`Frame dedup failed: ${warningReason(e)}`);
-              return result.frames;
-            });
+            if (rededuplicate) {
+              result.frames = await deduplicateFrames(result.frames).catch((e: unknown) => {
+                warnings.push(`Frame dedup failed: ${warningReason(e)}`);
+                return result.frames;
+              });
+            }
           }
-        } else {
+        } else if (rededuplicate) {
           result.frames = await deduplicateFrames(result.frames).catch((e: unknown) => {
             warnings.push(`Frame dedup failed: ${warningReason(e)}`);
             return result.frames;
@@ -595,10 +698,17 @@ export function assembleResultDoc(
  * into the response. When some frame files are gone (e.g. a cache hit whose temp
  * dir was already cleaned up), the JSON carries `framesEmbedded < frameCount`
  * plus a warning, rather than advertising `frameCount` images that aren't there.
+ *
+ * `extraWarnings` are per-CALL notes appended to the response only — never
+ * written into `result.warnings`. `result` may be the cached object shared by
+ * every later call for the same key, so a note about *this* call (the local
+ * fallback having been used, say) must not be pushed onto it: it would then
+ * reappear on requests where it wasn't true, once per repetition.
  */
 export async function buildAnalysisContent(
   result: IAnalysisResult,
   fields: AnalysisField[] | undefined,
+  extraWarnings?: string[],
 ): Promise<ToolContent[]> {
   const includeFrames = !fields || fields.includes('frames');
 
@@ -615,7 +725,11 @@ export async function buildAnalysisContent(
 
   const missing = includeFrames ? result.frames.length - images.length : 0;
   const textData = {
-    ...assembleResultDoc(result, fields, { missingFrames: missing, refreshHint: 'forceRefresh' }),
+    ...assembleResultDoc(result, fields, {
+      missingFrames: missing,
+      refreshHint: 'forceRefresh',
+      extraWarnings,
+    }),
     ...(includeFrames ? { framesEmbedded: images.length } : {}),
   };
 

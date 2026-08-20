@@ -26,7 +26,12 @@ import { warningReason } from './warnings.js';
 // frameless run hold frames: [] under the SAME key shape a framed read now
 // produces (skipFrames was unkeyed), so they must be recomputed once rather
 // than silently answering framed reads with zero frames.
-const SIDECAR_VERSION = 2;
+//
+// v3: smart frame selection became the default. A v2 sidecar holds the frames
+// the scene detector happened to fire on, under a key that now normalizes the
+// smart default away — so it would answer a smart read with scene-change
+// frames forever. The frames themselves changed, so the whole generation goes.
+const SIDECAR_VERSION = 3;
 
 /**
  * The result-defining inputs that key both the in-memory cache and the on-disk
@@ -56,6 +61,16 @@ export interface ResultDefiningParams {
   model?: string;
   language?: string;
   initialPrompt?: string;
+  /**
+   * Absent = the `'smart'` default. Only the legacy `'sceneChange'` mode is
+   * written out, so the common case keeps the shortest key — and a v3 sidecar
+   * with no entry here means exactly what a fresh smart run produces.
+   */
+  frameSelection?: 'sceneChange';
+  /** Absent = the default candidate multiplier. Smart selection only. */
+  frameCandidateMultiplier?: number;
+  /** Absent = the default OCR score weight. Smart selection only. */
+  frameOcrWeight?: number;
 }
 
 interface PersistedAnalysis {

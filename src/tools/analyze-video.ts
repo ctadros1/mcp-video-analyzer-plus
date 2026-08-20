@@ -2,7 +2,13 @@ import type { FastMCP } from 'fastmcp';
 import { z } from 'zod';
 import type { AnalysisField } from '../utils/field-filter.js';
 import { createProgressReporter } from '../utils/progress.js';
-import { isVideoSource } from '../utils/url-detector.js';
+import {
+  localFallbackPathParam,
+  remoteFailureInWarnings,
+  resolveVideoSource,
+  runWithLocalFallback,
+  videoUrlParam,
+} from '../utils/source-fallback.js';
 import {
   AnalyzeOptionsSchema,
   buildAnalysisContent,
@@ -11,15 +17,8 @@ import {
 } from './analyze-core.js';
 
 const AnalyzeVideoSchema = z.object({
-  url: z
-    .string()
-    .refine(isVideoSource, {
-      message:
-        'Must be a supported video URL (Loom, YouTube, Vimeo, TikTok, Instagram, X/Twitter, Twitch, Dailymotion, Facebook), a direct .mp4/.webm/.mov URL, or an absolute path / file:// URI to a local video file',
-    })
-    .describe(
-      'Video source: Loom share link, platform video URL (YouTube, Vimeo, TikTok, Instagram, X, Twitch, Dailymotion, Facebook), direct .mp4/.webm/.mov URL, or absolute path to a local video file',
-    ),
+  url: videoUrlParam,
+  localFallbackPath: localFallbackPathParam,
   options: AnalyzeOptionsSchema.describe('Analysis options'),
 });
 
@@ -30,7 +29,7 @@ export function registerAnalyzeVideo(server: FastMCP): void {
 
 Returns structured data about the video content:
 - Transcript with timestamps and speakers
-- Key frames extracted via scene-change detection (deduplicated, as images). For static clips with no scene cuts (e.g. talking-head Reels/Stories where only on-screen text changes) it automatically falls back to uniform temporal sampling.
+- Key frames selected from over-sampled candidates and scored for sharpness, on-screen text and visual diversity (deduplicated, as images). Static clips with no scene cuts (e.g. talking-head Reels/Stories where only on-screen text changes) are covered by the uniform-sampling candidate source.
 - OCR text extracted from frames (code, error messages, UI text, prices/dates/CTAs visible on screen)
 - Annotated timeline merging transcript + frames + OCR into a unified chronological view
 - Metadata (title, duration, platform)
@@ -45,7 +44,13 @@ Detail levels:
 
 Use options.fields to request only specific data (e.g., ["metadata", "transcript"]).
 Use options.forceRefresh to bypass the cache.
-Use options.model / options.language / options.initialPrompt to override Whisper transcription per call (e.g. a heavier model + a domain glossary for hard audio) without restarting the server.`,
+Use options.model / options.language / options.initialPrompt to override Whisper transcription per call (e.g. a heavier model + a domain glossary for hard audio) without restarting the server.
+
+Frame selection:
+- options.frameSelection "smart" (default) over-samples candidate frames (relaxed scene cuts + uniform sampling), scores them on sharpness and on-screen-text density, and greedily keeps a visually diverse subset — so mid-transition blur is rejected, look-alikes far apart in time are not both kept, and passages that change gradually still produce frames.
+- options.frameSelection "sceneChange" restores the legacy scene-detector-only behaviour (faster, no scoring).
+
+Pass localFallbackPath alongside url to fall back to a local copy of the video when the remote source is blocked or unreachable (YouTube anti-bot, missing yt-dlp, network failure); the fallback and the original remote error are reported in warnings[].`,
     parameters: AnalyzeVideoSchema,
     annotations: {
       title: 'Analyze Video',
@@ -56,17 +61,34 @@ Use options.model / options.language / options.initialPrompt to override Whisper
     },
     execute: async (args, { reportProgress }) => {
       const progress = createProgressReporter(reportProgress);
-      const { url, options } = args;
+      const { options } = args;
+      const source = resolveVideoSource(args);
       const params = resolveAnalyzeParams(options);
       const fields = options?.fields as AnalysisField[] | undefined;
 
       // Single-video path keeps the frame temp dir alive so a cache hit within
       // the TTL can still re-serve images; cleanup happens on process exit /
       // cache eviction. (The batch tool, which never inlines images, cleans up
-      // per item.)
-      const { result } = await getAnalysis(url, params, progress);
+      // per item.) A remote attempt that gets superseded by the local fallback
+      // is the exception — its temp dir has no result left to serve, so
+      // `dispose` reclaims it immediately.
+      const outcome = await runWithLocalFallback(
+        source,
+        (input) => getAnalysis(input, params, progress),
+        {
+          remoteFailureIn: (handle) => remoteFailureInWarnings(handle.result.warnings),
+          dispose: (handle) => handle.cleanup(),
+        },
+      );
+      const { result } = outcome.value;
 
-      return { content: await buildAnalysisContent(result, fields) };
+      return {
+        content: await buildAnalysisContent(
+          result,
+          fields,
+          outcome.warning ? [outcome.warning] : undefined,
+        ),
+      };
     },
   });
 }

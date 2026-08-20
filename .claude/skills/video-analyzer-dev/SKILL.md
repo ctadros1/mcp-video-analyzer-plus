@@ -5,10 +5,30 @@ metadata:
   internal: true
 ---
 
-# mcp-video-analyzer — development guide
+# mcp-video-analyzer-plus — development guide
 
 Project-internal. This is the single source of truth for contributing to this
 repository; `AGENTS.md` points here rather than repeating it.
+
+## Fork status
+
+This is a fork of `guimatheus92/mcp-video-analyzer`, kept mergeable with it.
+`upstream` points at the original; `git pull upstream main` is expected to keep
+working, because the yt-dlp / remote-extraction surface is an active arms race
+against YouTube that is better tracked than rewritten. **Do not restructure
+`src/adapters/ytdlp.adapter.ts`, `src/utils/ytdlp.ts`, or the other extraction
+internals** beyond what a feature strictly needs.
+
+Two additions live on top of upstream, both additive — existing calls behave
+exactly as before when the new options are absent:
+
+- **Smart frame selection** (`src/processors/frame-selector.ts` +
+  `src/processors/frame-signals.ts`) — default `frameSelection: 'smart'`.
+- **URL + local-file fallback** (`src/utils/source-fallback.ts`) — optional
+  `localFallbackPath` on all seven single-video tools.
+
+Not published to npm. `dist/index.js` is run directly; `.mcp.json`,
+`smithery.yaml`, README and `skills/video/SKILL.md` all reflect that.
 
 ## Project
 
@@ -39,7 +59,7 @@ MCP server for video analysis — extracts transcripts, key frames, metadata, OC
 ## Architecture
 
 - **Adapters** (`src/adapters/`) — platform-specific logic (Loom GraphQL, yt-dlp platforms [YouTube/Vimeo/TikTok/Instagram/X/Twitch/Dailymotion/Facebook], direct URL download, TwelveLabs, local files). Each implements `IVideoAdapter`. Registered most-specific-first in `server.ts`: Loom → LocalFile → YtDlp → TwelveLabs → Direct.
-- **Processors** (`src/processors/`) — shared processing: frame extraction (ffmpeg + browser fallback), image optimization + OCR preprocessing (sharp), frame dedup (dHash, visual + OCR-text-aware), OCR (tesseract.js), audio transcription (whisper), annotated timeline.
+- **Processors** (`src/processors/`) — shared processing: frame extraction (ffmpeg + browser fallback), frame **selection** (`frame-selector.ts`, scoring + greedy diverse selection) over cheap per-frame signals (`frame-signals.ts`: Laplacian-variance sharpness, mean colour), image optimization + OCR preprocessing (sharp), frame dedup (dHash, visual + OCR-text-aware), OCR (tesseract.js), audio transcription (whisper), annotated timeline.
 - **Tools** (`src/tools/`) — MCP tool definitions registered on the FastMCP server. `analyze-core.ts` holds the shared cache + pipeline (`getAnalysis`) + content builder reused by both `analyze_video` and the batch `analyze_videos`.
 - **Utils** (`src/utils/`) — URL detection, VTT parsing, temp files, in-memory + on-disk cache (`cache.ts`, `analysis-sidecar.ts`), bounded concurrency (`concurrency.ts`), env-flag parsing (`env.ts`).
 - **CLI** (`src/cli.ts`) — one-shot `analyze` subcommand (`mcp-video-analyzer analyze <url>`) reusing the same `getAnalysis` pipeline: single JSON document on stdout, progress/errors on stderr, frame JPEGs copied to `--out` (default `<user-cache>/mcp-video-analyzer/<url-hash>/` via `persistentCacheDir()`) *before* `handle.cleanup()`. `src/index.ts` dispatches on `argv[2]` — no args = MCP stdio server (Docker/smithery/MCP configs rely on this). Adapter registration is shared via `registerAllAdapters()` in `server.ts`. Version literal lives in `src/version.ts`.
@@ -63,7 +83,11 @@ MCP server for video analysis — extracts transcripts, key frames, metadata, OC
 - Frame extraction uses bundled `ffmpeg-static` — no system ffmpeg needed.
 - **The bundled `ffmpeg-static` 7.0.2 LINUX build segfaults on the MPEG-TS demuxer.** Any `.mts`/`.m2ts` input (the standard AVCHD camcorder format) kills ffmpeg on probe, extract, and even remux — in the published Docker image and for every Linux user. The byte-identical file parses fine on the Windows build, so it is the binary, not the file; `ffmpeg-static@5.3.0` is the latest release, so there is no version to upgrade to. Found by `test/e2e/video-formats.e2e.test.ts`, which is exactly the blind spot it was written for. A signal-terminated ffmpeg is NOT "no frames found": `ffmpegCrashReason()` in `frame-extractor.ts` turns it into one actionable, path-free warning (never `e.message`, which is the full argv + banner), and every rewrap site in that file resolves the reason while the original error still carries `.signal`. The matrix probes the binary's actual capability rather than branching on `process.platform` — a platform check is a guess about a binary, not a fact about it — and asserts the degraded contract where the demuxer is broken, so a silently-empty result stays a failure on every platform.
 - Black frame detection filters out DRM-protected/blank frames automatically.
-- Scene detection threshold default: 0.1 (optimized for screencasts/demos). Use `extractKeyFrames()` (not raw `extractSceneFrames`) so static clips with no scene cuts fall back to uniform temporal sampling — critical for talking-head Reels/Stories.
+- Scene detection threshold default: 0.1 (optimized for screencasts/demos). Use `extractKeyFrames()` (not raw `extractSceneFrames`) so static clips with no scene cuts fall back to uniform temporal sampling — critical for talking-head Reels/Stories. That is now the LEGACY path, reached only via `frameSelection: 'sceneChange'`.
+- **Smart frame selection is the default** (`selectKeyFrames()` in `frame-selector.ts`): over-sample candidates from a relaxed scene detector AND uniform sampling, score them (normalized sharpness + normalized OCR text density, `frameOcrWeight` splitting the two), then greedily keep the highest scorers that are distinct from every already-kept frame. Both signals normalize against the POOL maximum, not an absolute scale — that is what stops the OCR term from penalizing b-roll, where every candidate scores 0 for text and sharpness alone ranks.
+- **The duplicate test needs all three of text, hash and mean colour to agree** (`areDuplicates()`). None of them can carry it alone, and the hash least of all: measured across this repo's fixtures, dHash spans almost no range — a 30s moving `testsrc` tops out at 5-6 differing bits of 72 (median 4), and text-change clips at 1-2. Applying upstream's threshold of 5 as a GLOBAL gate (rather than upstream's adjacent-only comparison, where a rejection costs one frame) kept **one** frame out of thirty. Mean colour exists because dHash greyscales and compares each pixel to its right neighbour, so it is blind to colour entirely: solid red/blue/green cards are 0 bits apart. OCR text is in the rule for the same reason `dedupeKeepingTextChanges` exists. Re-measure before changing any of the three thresholds; `src/processors/frame-selector.test.ts` pins the outcomes against real clips.
+- Smart selection bounds its own cost: candidates are capped at 90, the OCR signal is dropped (with a warning) above 60 candidates, and the OCR results it computed are handed back as `ocrByPath` so `analyze-core` reuses them instead of recognizing the selected frames a second time (`reuseSelectionOcr`, all-or-nothing — a partial hit would have to pad with empty entries, and an empty entry is indistinguishable from "this frame has no text", which is the exact signal the text-aware dedup reads). `get_frames` passes `useOcr: false` — it has never run OCR and is documented as the fast tool.
+- **`localFallbackPath` retries a blocked remote source against a local file** (`src/utils/source-fallback.ts`). Two failure shapes must both be caught: a thrown error, and — far more often here — a SUCCESSFUL call that degraded around the failure and explained itself in `warnings[]`, which is what `remoteFailureIn` inspects. A tool that builds its "could not extract any frames" reason AFTER the fallback runner has returned will never trigger the retry; build it inside the attempt (see `get-frames.ts`). Classification is a positive allowlist of concrete markers this codebase emits, with an exclusion list checked first so caller mistakes — bad timestamp, backwards range, unsupported URL, comments 404 — are never retried against a different file. Per-call fallback notes go through `buildAnalysisContent(result, fields, extraWarnings)`, NEVER `result.warnings.push()`: `result` may be the cached object shared by later calls, and a note about one call would then reappear on requests where it was not true.
 - OCR runs on every frame *before* dedup; when OCR is enabled, dedup uses `dedupeKeepingTextChanges()` (visual + on-screen-text aware) so frames whose only change is the text overlay survive. Plain `deduplicateFrames()` (visual only) is used when OCR is off.
 - OCR frames are preprocessed (grayscale + 2× upscale + contrast normalization + sharpen) by default; `MCP_OCR_PREPROCESS=0` disables.
 - Transcription strategy order: HF transformers (opt-in) → whisper CLI → OpenAI API. HF only runs when `WHISPER_HF_MODEL` is set, so otherwise the CLI wins and its `WHISPER_MODEL`/`WHISPER_LANGUAGE` settings are never silently overridden. `model`/`language`/`initialPrompt` are overridable per call on `analyze_video`/`analyze_videos`/`get_transcript`.
@@ -106,6 +130,7 @@ For anything touching adapters or downloads, also exercise it in a container —
 
 ### Release Process
 
+0. **This fork does not publish to npm.** Steps 7 and 10 below are upstream's; skip them unless that decision changes. The rest (version bump, checks, smoke, Docker) still apply to a release.
 1. **Bump version** in `package.json`, `src/version.ts` AND `.claude-plugin/plugin.json` (must match).
 2. **Run checks**: `npm run check` (format, lint, typecheck, knip, tests).
 3. **Run smoke test**: `npm run test:smoke` (verifies MCP server starts and responds).
