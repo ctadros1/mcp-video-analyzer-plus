@@ -113,6 +113,28 @@ export async function optimizeFrame(
 }
 
 /**
+ * Width to feed Tesseract, or `undefined` to leave the frame alone.
+ *
+ * Upscaling exists for frames whose text is small in absolute pixels — a
+ * 640px-wide clip, or a frame that was captured small to begin with. It does
+ * nothing for a frame that is already large, and it is not free: measured on
+ * the dense-UI golden clip (1920px source, 15px on-screen text), recognition
+ * found the SAME 36 of 60 ground-truth words whether the frame was upscaled to
+ * 3000px or left untouched, while the upscale made the pass 50% slower. Across
+ * 40 frames of a 1080p video that was ~23 seconds spent for no additional text.
+ *
+ * So: upscale the small ones, leave the large ones alone. The threshold sits
+ * above 720p-wide so ordinary screen recordings are already past it.
+ */
+const OCR_UPSCALE_BELOW = 1600;
+
+export function ocrUpscaleWidth(sourceWidth: number | undefined): number | undefined {
+  if (!sourceWidth) return undefined;
+  if (sourceWidth >= OCR_UPSCALE_BELOW) return undefined;
+  return Math.min(sourceWidth * 2, 3000);
+}
+
+/**
  * Produce an OCR-optimized copy of a frame: grayscale, 2× upscale, contrast
  * normalization, and a mild sharpen. These steps reliably lift Tesseract
  * accuracy on stylized on-screen text (prices, dates, coupons, CTAs — common in
@@ -123,7 +145,7 @@ export async function optimizeFrame(
  */
 export async function preprocessForOcr(inputPath: string, outputPath: string): Promise<string> {
   const meta = await sharp(inputPath).metadata();
-  const targetWidth = meta.width ? Math.min(meta.width * 2, 3000) : undefined;
+  const targetWidth = ocrUpscaleWidth(meta.width);
 
   let pipeline = sharp(inputPath).grayscale();
   if (targetWidth) {

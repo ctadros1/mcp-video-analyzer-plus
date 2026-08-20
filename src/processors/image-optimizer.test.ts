@@ -7,6 +7,7 @@ import { cleanupTempDir, createTempDir } from '../utils/temp-files.js';
 import {
   keyedFrameMaxWidth,
   ocrSourceFrames,
+  ocrUpscaleWidth,
   optimizeFrame,
   optimizeFrames,
   optimizeFramesKeepingOriginals,
@@ -343,7 +344,14 @@ describe('preprocessForOcr', () => {
     }
   });
 
-  it('caps the upscale at 3000px', async () => {
+  /**
+   * A frame that is already large is left at its own size. Measured on the
+   * dense-UI golden clip (1920px source, 15px on-screen text), recognition
+   * found the same 36 of 60 ground-truth words upscaled to 3000px or not
+   * upscaled at all, while the upscale cost 50% more time — about 23 seconds
+   * across the 40 frames of a 1080p analysis, for no extra text.
+   */
+  it('leaves an already-large frame at its source width', async () => {
     const tempDir = await createTempDir();
     try {
       const inputPath = await createTestImage(tempDir, 'wide-in.png', { width: 1920, height: 200 });
@@ -351,9 +359,32 @@ describe('preprocessForOcr', () => {
 
       await preprocessForOcr(inputPath, outputPath);
 
-      expect((await sharp(outputPath).metadata()).width).toBe(3000);
+      expect((await sharp(outputPath).metadata()).width).toBe(1920);
     } finally {
       await cleanupTempDir(tempDir);
     }
+  });
+});
+
+describe('ocrUpscaleWidth', () => {
+  it('doubles a small frame, where the upscale actually buys recognition', () => {
+    expect(ocrUpscaleWidth(400)).toBe(800);
+    expect(ocrUpscaleWidth(1024)).toBe(2048);
+  });
+
+  it('leaves a large frame alone', () => {
+    expect(ocrUpscaleWidth(1600)).toBeUndefined();
+    expect(ocrUpscaleWidth(1920)).toBeUndefined();
+    expect(ocrUpscaleWidth(3840)).toBeUndefined();
+  });
+
+  it('still caps a doubled width so a wide-but-under-threshold frame cannot explode', () => {
+    // 1599 x 2 = 3198, above the cap.
+    expect(ocrUpscaleWidth(1599)).toBe(3000);
+  });
+
+  it('does nothing without a known width', () => {
+    expect(ocrUpscaleWidth(undefined)).toBeUndefined();
+    expect(ocrUpscaleWidth(0)).toBeUndefined();
   });
 });

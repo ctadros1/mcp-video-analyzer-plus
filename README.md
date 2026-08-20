@@ -47,13 +47,13 @@ Add this to your MCP client's config, restart it, and paste a video link. That's
 
 Two ways in. Pick one — you don't need both.
 
-| | **A — one line, no clone** | **B — local clone** |
-|---|---|---|
-| Steps | Paste one config block | Clone, build, then paste |
-| First launch | Slow (npm builds it: 1–2 min) | Instant |
-| Updating | Automatic on cache miss | `git pull && npm run build` |
-| Editing the code | No | Yes |
-| Best for | Just using it | Hacking on it, or if A times out |
+|                  | **A — one line, no clone**    | **B — local clone**              |
+| ---------------- | ----------------------------- | -------------------------------- |
+| Steps            | Paste one config block        | Clone, build, then paste         |
+| First launch     | Slow (npm builds it: 1–2 min) | Instant                          |
+| Updating         | Automatic on cache miss       | `git pull && npm run build`      |
+| Editing the code | No                            | Yes                              |
+| Best for         | Just using it                 | Hacking on it, or if A times out |
 
 **Start with A.** Fall back to B if your client times out waiting for the server to boot, or if you want to change the code.
 
@@ -190,7 +190,7 @@ VS Code: `~/.vscode/mcp.json` (or `%APPDATA%\Code\User\mcp.json`). Cursor: **Set
 /plugin install video@mcp-video-analyzer-plus
 ```
 
-Registers the MCP server *and* a `/video` command. Requires the clone to be built, since the bundled config launches `dist/index.js` from the plugin directory.
+Registers the MCP server _and_ a `/video` command. Requires the clone to be built, since the bundled config launches `dist/index.js` from the plugin directory.
 
 ```
 /video https://youtu.be/jNQXAC9IVRw what happens at 0:10?
@@ -218,16 +218,16 @@ It should call `analyze_video` on its own, with no prompting.
 
 ### Troubleshooting
 
-| Symptom | Cause | Fix |
-|---|---|---|
-| Server doesn't appear at all | Client wasn't fully restarted | Cmd+Q and reopen — closing the window is not enough |
-| "server failed to start" on Route A | First-run build exceeded the client's startup timeout | Retry (the build is cached now), or switch to Route B |
-| "Cannot find module …/dist/index.js" | Never built, or path is wrong | `npm run build` in the clone, then re-check the path from Step 2b |
-| Config changes do nothing | Malformed JSON — the client silently ignores the file | `node -e "require('/path/to/claude_desktop_config.json')"` — it prints the syntax error |
-| Old behaviour after `git pull` | `dist/` is gitignored and not rebuilt automatically | `npm run build`, then restart the client |
-| `export_video_bundle` missing | Still running upstream | Check the config actually points at this fork |
-| YouTube link fails, others work | yt-dlp missing, or the video is blocked | `pip install yt-dlp`; for blocked videos pass `localFallbackPath` — see [URL + local-file fallback](#url--local-file-fallback) |
-| Instagram / age-restricted fails | Needs a logged-in session | Set `YTDLP_COOKIES_FROM_BROWSER=chrome` or `YTDLP_COOKIES=<netscape-cookie-file>` |
+| Symptom                              | Cause                                                 | Fix                                                                                                                            |
+| ------------------------------------ | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Server doesn't appear at all         | Client wasn't fully restarted                         | Cmd+Q and reopen — closing the window is not enough                                                                            |
+| "server failed to start" on Route A  | First-run build exceeded the client's startup timeout | Retry (the build is cached now), or switch to Route B                                                                          |
+| "Cannot find module …/dist/index.js" | Never built, or path is wrong                         | `npm run build` in the clone, then re-check the path from Step 2b                                                              |
+| Config changes do nothing            | Malformed JSON — the client silently ignores the file | `node -e "require('/path/to/claude_desktop_config.json')"` — it prints the syntax error                                        |
+| Old behaviour after `git pull`       | `dist/` is gitignored and not rebuilt automatically   | `npm run build`, then restart the client                                                                                       |
+| `export_video_bundle` missing        | Still running upstream                                | Check the config actually points at this fork                                                                                  |
+| YouTube link fails, others work      | yt-dlp missing, or the video is blocked               | `pip install yt-dlp`; for blocked videos pass `localFallbackPath` — see [URL + local-file fallback](#url--local-file-fallback) |
+| Instagram / age-restricted fails     | Needs a logged-in session                             | Set `YTDLP_COOKIES_FROM_BROWSER=chrome` or `YTDLP_COOKIES=<netscape-cookie-file>`                                              |
 
 ### Keeping it up to date
 
@@ -262,21 +262,21 @@ node /ABSOLUTE/PATH/TO/mcp-video-analyzer-plus/dist/index.js analyze "https://yo
 
 stdout is a single JSON document — `metadata`, `transcript`, `ocrResults`, `timeline`, `warnings`, `frameCount`, and `frames` as `{ time, filePath, mimeType }` entries pointing at JPEG key frames copied to `--out` (default: the per-user cache dir — `%LOCALAPPDATA%` on Windows, `~/Library/Caches` on macOS, `$XDG_CACHE_HOME` or `~/.cache` on Linux — under `mcp-video-analyzer/<source-hash>/`; set `MCP_CACHE_DIR` to an absolute path to relocate it). Nothing reaps that location, so frames persist until you delete them; the directories are created `0700`. Progress streams on stderr, so stdout pipes straight into a JSON parser. Partial failures land in `warnings` with exit code 0; only hard failures exit 1.
 
-| Flag | Description |
-|------|-------------|
-| `--detail <level>` | `brief` (metadata + transcript, no frames), `standard` (default), `detailed` |
-| `--max-frames <n>` | Max key frames, 1–60 (default adapts to duration) |
-| `--max-width <px>` | Width cap for emitted frames (default `800`, or `MCP_FRAME_MAX_WIDTH`); `0` keeps the source resolution — see [Frame size](#frame-size-dense-ui-captures) |
-| `--fields <list>` | Output filter — comma-separated subset: `metadata,transcript,frames,comments,chapters,ocrResults,timeline,aiSummary`. Filters the emitted JSON only; use `--detail brief` to actually skip download/frame extraction |
-| `--force-refresh` | Bypass the cache and re-analyze |
-| `--frame-selection <mode>` | `smart` (default) or `sceneChange` — see [Smart frame selection](#smart-frame-selection) |
-| `--frame-candidates <n>` | Candidates generated per requested frame in smart mode, 1–6 (default `3`, capped at 90 total) |
-| `--frame-ocr-weight <w>` | Share of the smart score carried by on-screen text, 0–1 (default `0.4`) |
-| `--local-fallback <path>` | Local copy of the video, used automatically if the remote source fails — see [URL + local-file fallback](#url--local-file-fallback). Works with no positional URL too |
-| `--zip <path>` | Also package the result as a `.zip` (`frames/` + `transcript.md`) at `<path>`; a directory puts it inside under the video's title — see [Exporting a zip bundle](#exporting-a-zip-bundle) |
-| `--ocr-language <codes>` | Tesseract languages (default `eng+por`) |
-| `--model <name>` / `--language <code>` | Whisper overrides for the transcription fallback |
-| `--out <dir>` | Where frame images are copied |
+| Flag                                   | Description                                                                                                                                                                                                          |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--detail <level>`                     | `brief` (metadata + transcript, no frames), `standard` (default), `detailed`                                                                                                                                         |
+| `--max-frames <n>`                     | Max key frames, 1–60 (default adapts to duration)                                                                                                                                                                    |
+| `--max-width <px>`                     | Width cap for emitted frames (default `800`, or `MCP_FRAME_MAX_WIDTH`); `0` keeps the source resolution — see [Frame size](#frame-size-dense-ui-captures)                                                            |
+| `--fields <list>`                      | Output filter — comma-separated subset: `metadata,transcript,frames,comments,chapters,ocrResults,timeline,aiSummary`. Filters the emitted JSON only; use `--detail brief` to actually skip download/frame extraction |
+| `--force-refresh`                      | Bypass the cache and re-analyze                                                                                                                                                                                      |
+| `--frame-selection <mode>`             | `smart` (default) or `sceneChange` — see [Smart frame selection](#smart-frame-selection)                                                                                                                             |
+| `--frame-candidates <n>`               | Candidates generated per requested frame in smart mode, 1–6 (default `3`, capped at 90 total)                                                                                                                        |
+| `--frame-ocr-weight <w>`               | Share of the smart score carried by on-screen text, 0–1 (default `0.4`)                                                                                                                                              |
+| `--local-fallback <path>`              | Local copy of the video, used automatically if the remote source fails — see [URL + local-file fallback](#url--local-file-fallback). Works with no positional URL too                                                |
+| `--zip <path>`                         | Also package the result as a `.zip` (`frames/` + `transcript.md`) at `<path>`; a directory puts it inside under the video's title — see [Exporting a zip bundle](#exporting-a-zip-bundle)                            |
+| `--ocr-language <codes>`               | Tesseract languages (default `eng+por`)                                                                                                                                                                              |
+| `--model <name>` / `--language <code>` | Whisper overrides for the transcription fallback                                                                                                                                                                     |
+| `--out <dir>`                          | Where frame images are copied                                                                                                                                                                                        |
 
 Run it with no arguments to start the MCP stdio server instead — the CLI is purely additive.
 
@@ -286,16 +286,16 @@ Nine tools — the AI picks the cheapest one for the job and calls it automatica
 
 All seven single-video tools (everything except the batch `analyze_videos`) accept an optional **`localFallbackPath`** alongside `url`, and use it automatically when the remote source is blocked or unreachable — see [URL + local-file fallback](#url--local-file-fallback).
 
-| Tool | What it does |
-|------|--------------|
-| **`analyze_video`** | Full analysis: transcript + key frames + OCR + timeline + metadata |
-| **`analyze_videos`** | Batch version, one structured result per source (resumable) |
-| **`get_transcript`** | Transcript only (native captions or Whisper fallback) |
-| **`get_metadata`** | Metadata + comments + chapters, no download |
-| **`get_frames`** | Key frames only (smart selection, scene-change, or dense 1 fps) |
-| **`analyze_moment`** | Deep-dive on a time range (burst frames + transcript + OCR) |
-| **`get_frame_at`** | Single frame at a timestamp |
-| **`get_frame_burst`** | N frames across a narrow window (motion/animation) |
+| Tool                      | What it does                                                            |
+| ------------------------- | ----------------------------------------------------------------------- |
+| **`analyze_video`**       | Full analysis: transcript + key frames + OCR + timeline + metadata      |
+| **`analyze_videos`**      | Batch version, one structured result per source (resumable)             |
+| **`get_transcript`**      | Transcript only (native captions or Whisper fallback)                   |
+| **`get_metadata`**        | Metadata + comments + chapters, no download                             |
+| **`get_frames`**          | Key frames only (smart selection, scene-change, or dense 1 fps)         |
+| **`analyze_moment`**      | Deep-dive on a time range (burst frames + transcript + OCR)             |
+| **`get_frame_at`**        | Single frame at a timestamp                                             |
+| **`get_frame_burst`**     | N frames across a narrow window (motion/animation)                      |
 | **`export_video_bundle`** | Packages the analysis as a `.zip` on disk — `frames/` + `transcript.md` |
 
 <details>
@@ -310,8 +310,9 @@ Extracts everything from a video URL in one call:
 ```
 
 Returns:
+
 - **Transcript** with timestamps and speakers
-- **Key frames** chosen by [smart selection](#smart-frame-selection): candidates are over-sampled from scene cuts *and* uniform sampling, scored on sharpness and on-screen-text density, then kept only if distinct from every frame already selected. Blurred transition frames are rejected, look-alikes far apart in time are not both kept, and passages that change gradually still produce frames instead of an empty result.
+- **Key frames** chosen by [smart selection](#smart-frame-selection): candidates are over-sampled from scene cuts _and_ uniform sampling, scored on sharpness and on-screen-text density, then kept only if distinct from every frame already selected. Blurred transition frames are rejected, look-alikes far apart in time are not both kept, and passages that change gradually still produce frames instead of an empty result.
 - **OCR text** extracted from frames (code, error messages, UI text, prices/dates/CTAs visible on screen)
 - **Annotated timeline** merging transcript + frames + OCR into a unified "what happened when" view
 - **Metadata** (title, duration, platform)
@@ -321,6 +322,7 @@ Returns:
 The AI will **automatically** call this tool when it sees a video URL — no need to ask.
 
 Options:
+
 - `detail` — analysis depth: `"brief"` (metadata + truncated transcript, no frames), `"standard"` (default), `"detailed"` (dense sampling, more frames)
 - `fields` — array of specific fields to return, e.g. `["metadata", "transcript"]`. Available: `metadata`, `transcript`, `frames`, `comments`, `chapters`, `ocrResults`, `timeline`, `aiSummary`
 - `maxFrames` (1-60) — cap on extracted frames. Default scales with video duration at `standard` detail (~12 for ≤30s up to 60 for >10min); fixed 60 at `detailed`, 0 at `brief`. An explicit value always wins
@@ -402,6 +404,7 @@ Returns metadata, comments, chapters, and AI summary without downloading the vid
 ```
 
 Three modes:
+
 - **Smart selection** (default) — over-samples candidates, scores them on sharpness, and keeps a visually diverse subset. This tool does not run OCR, so the on-screen-text signal is not part of the score here; use `analyze_video` when that matters
 - **Scene-change detection** (`frameSelection: "sceneChange"`) — upstream behaviour, captures visual transitions
 - **Dense sampling** (`dense: true`) — 1 frame/sec for full coverage; takes precedence over `frameSelection`
@@ -453,11 +456,11 @@ For motion, vibration, animations, or fast scrolling — burst mode captures N f
 
 ## Detail Levels
 
-| Level | Frames | Transcript | OCR | Timeline | Use case |
-|-------|--------|-----------|-----|----------|----------|
-| `brief` | None | First 10 entries | No | No | Quick check — what's this video about? |
-| `standard` | Duration-adaptive: ~12 (≤30s) up to 60 (>10min), scene-change | Full | Yes | Yes | Default — full analysis |
-| `detailed` | Up to 60 (1fps dense) | Full | Yes | Yes | Deep analysis — every second captured |
+| Level      | Frames                                                        | Transcript       | OCR | Timeline | Use case                               |
+| ---------- | ------------------------------------------------------------- | ---------------- | --- | -------- | -------------------------------------- |
+| `brief`    | None                                                          | First 10 entries | No  | No       | Quick check — what's this video about? |
+| `standard` | Duration-adaptive: ~12 (≤30s) up to 60 (>10min), scene-change | Full             | Yes | Yes      | Default — full analysis                |
+| `detailed` | Up to 60 (1fps dense)                                         | Full             | Yes | Yes      | Deep analysis — every second captured  |
 
 ## Caching
 
@@ -474,13 +477,13 @@ This makes `analyze_videos` over thousands of files resumable, and lets an exter
 
 ## Supported Sources
 
-| Source | Transcript | Metadata | Comments | Frames | Auth |
-|--------|:----------:|:--------:|:--------:|:------:|:----:|
-| **Loom** | Yes | Yes | Yes | Yes (usually needs yt-dlp — see note) | None |
-| **YouTube / Vimeo / TikTok / Instagram / X / Twitch / Dailymotion / Facebook** | Native captions (uploaded > auto-generated) or Whisper fallback | Yes (title, duration, uploader, views, chapters, upload date) | No | Yes (capped at 1080p) | yt-dlp installed; cookies for Instagram / age-restricted (see below) |
-| **Direct URL** (.mp4, .mov, .mkv, .webm, …) | No | Duration only | No | Yes | None |
-| **Direct URL + TwelveLabs** | Yes (Pegasus, best-effort) | Duration floor + title | No | Yes | `TWELVELABS_API_KEY` |
-| **Local file** (absolute path or `file://` URI) | Sidecar `.vtt`/`.srt` or Whisper fallback | Probed via ffmpeg (duration, dims, codec, audio presence) | No | Yes | None |
+| Source                                                                         |                           Transcript                            |                           Metadata                            | Comments |                Frames                 |                                 Auth                                 |
+| ------------------------------------------------------------------------------ | :-------------------------------------------------------------: | :-----------------------------------------------------------: | :------: | :-----------------------------------: | :------------------------------------------------------------------: |
+| **Loom**                                                                       |                               Yes                               |                              Yes                              |   Yes    | Yes (usually needs yt-dlp — see note) |                                 None                                 |
+| **YouTube / Vimeo / TikTok / Instagram / X / Twitch / Dailymotion / Facebook** | Native captions (uploaded > auto-generated) or Whisper fallback | Yes (title, duration, uploader, views, chapters, upload date) |    No    |         Yes (capped at 1080p)         | yt-dlp installed; cookies for Instagram / age-restricted (see below) |
+| **Direct URL** (.mp4, .mov, .mkv, .webm, …)                                    |                               No                                |                         Duration only                         |    No    |                  Yes                  |                                 None                                 |
+| **Direct URL + TwelveLabs**                                                    |                   Yes (Pegasus, best-effort)                    |                    Duration floor + title                     |    No    |                  Yes                  |                         `TWELVELABS_API_KEY`                         |
+| **Local file** (absolute path or `file://` URI)                                |            Sidecar `.vtt`/`.srt` or Whisper fallback            |   Probed via ffmpeg (duration, dims, codec, audio presence)   |    No    |                  Yes                  |                                 None                                 |
 
 > **Loom frames**: transcript, metadata, and comments come straight from Loom's API with no extra tooling. Frame extraction is different — Loom serves most videos as separate DASH video+audio streams, which only [yt-dlp](https://github.com/yt-dlp/yt-dlp) (`pip install yt-dlp`) fetches and merges. Merging uses the bundled `ffmpeg-static`, so no system ffmpeg is required. Without yt-dlp a direct-CDN fallback still covers some videos; when it can't, you get transcript + metadata + comments plus a warning explaining why frames are missing.
 >
@@ -501,10 +504,10 @@ Single-video pages on major platforms route through [yt-dlp](https://github.com/
 - **Download**: capped at 1080p (frames/OCR don't need more), live streams are skipped, and DASH audio+video is merged with the bundled `ffmpeg-static` (no system ffmpeg required).
 - **Cookies** — Instagram and age-restricted videos usually require a logged-in session:
 
-| Env var | What it does | Example |
-|---------|-------------|---------|
-| `YTDLP_COOKIES` | Cookie file (Netscape format), wins when both are set | `C:/secrets/cookies.txt` |
-| `YTDLP_COOKIES_FROM_BROWSER` | Extract cookies from an installed browser | `chrome`, `edge`, `firefox` |
+| Env var                      | What it does                                          | Example                     |
+| ---------------------------- | ----------------------------------------------------- | --------------------------- |
+| `YTDLP_COOKIES`              | Cookie file (Netscape format), wins when both are set | `C:/secrets/cookies.txt`    |
+| `YTDLP_COOKIES_FROM_BROWSER` | Extract cookies from an installed browser             | `chrome`, `edge`, `firefox` |
 
 > Browser cookie extraction requires the browser to be **closed** on Windows (the cookie database is locked while it runs). If that's inconvenient, export a `cookies.txt` once (e.g. with a "Get cookies.txt" browser extension) and point `YTDLP_COOKIES` at it. Private/age-restricted videos without valid cookies don't crash the tool — the yt-dlp `ERROR:` line surfaces in `warnings[]`.
 
@@ -512,7 +515,7 @@ Single-video pages on major platforms route through [yt-dlp](https://github.com/
 
 Set the `TWELVELABS_API_KEY` environment variable to analyze direct video URLs with [TwelveLabs](https://twelvelabs.io) **Pegasus**. Pegasus analyzes the video server-side (visuals **and** its own audio) and returns an **AI-generated, timestamped transcript** plus an AI summary as text — capabilities the `DirectAdapter` can't provide (a raw `.mp4` URL has no transcript or summary on its own), and with **no Whisper key required**.
 
-The transcript is best-effort LLM output, not a deterministic ASR dump: Pegasus is *prompted* to emit `[MM:SS] line` rows, and lines that don't match that shape are dropped, so wording and exact timestamps depend on the model's prompt adherence. Failures (bad key, timeout, API error) surface in the tool's `warnings[]` rather than silently returning an empty transcript.
+The transcript is best-effort LLM output, not a deterministic ASR dump: Pegasus is _prompted_ to emit `[MM:SS] line` rows, and lines that don't match that shape are dropped, so wording and exact timestamps depend on the model's prompt adherence. Failures (bad key, timeout, API error) surface in the tool's `warnings[]` rather than silently returning an empty transcript.
 
 The biggest win is on the text-only paths: `get_transcript` and `get_metadata` return a Pegasus transcript and summary for direct URLs — a few KB of text, no frame images, no per-frame token cost. `analyze_video` at `detail: "standard"`/`"detailed"` still extracts frames in addition (use `detail: "brief"` to stay text-only).
 
@@ -526,24 +529,24 @@ When a source has no native transcript (no sidecar `.vtt`/`.srt`, no embedded su
 
 > **Silent tracks**: before any Whisper run, the audio is probed with ffmpeg `volumedetect` (first 2 minutes). A present-but-mute track — common in muted Reels/Stories — skips transcription entirely and emits a warning that the empty transcript is **expected content, not an error**, saving a pointless Whisper run.
 
-1. **@huggingface/transformers** (JS-native, zero external deps) — **opt-in only**: this strategy runs *first*, but **only when `WHISPER_HF_MODEL` is explicitly set**. When it's unset (the default) the strategy is skipped entirely, so the CLI below wins and its `WHISPER_MODEL`/`WHISPER_LANGUAGE` settings are never silently overridden.
+1. **@huggingface/transformers** (JS-native, zero external deps) — **opt-in only**: this strategy runs _first_, but **only when `WHISPER_HF_MODEL` is explicitly set**. When it's unset (the default) the strategy is skipped entirely, so the CLI below wins and its `WHISPER_MODEL`/`WHISPER_LANGUAGE` settings are never silently overridden.
 2. **`whisper` CLI** — used when a `whisper` executable is found (`pip install -U openai-whisper`). Point `WHISPER_BIN` at the executable if it isn't on `PATH`. Model via `WHISPER_MODEL`, language via `WHISPER_LANGUAGE`. The bundled `ffmpeg-static` is put on the CLI's `PATH` automatically, so no system ffmpeg is required.
 3. **OpenAI Whisper API** — used when `OPENAI_API_KEY` is set.
 
 > **No backend configured?** If none of the three is available (no `whisper` on `PATH`/`WHISPER_BIN`, no `OPENAI_API_KEY`, no `WHISPER_HF_MODEL`), transcription tools return an empty transcript **with a warning telling you how to enable one** — rather than a silent "no transcript". Install `openai-whisper` or set one of the keys above. (The CLI is spawned with `PYTHONUTF8=1` so non-English/CJK transcripts don't crash the Python process on Windows.)
 
-| Env var | Applies to | Default | Example |
-|---------|-----------|---------|---------|
-| `WHISPER_MODEL` | `whisper` CLI | `tiny` | `small`, `medium` |
-| `WHISPER_LANGUAGE` | `whisper` CLI / OpenAI API | auto-detect | `pt`, `en`, `es` |
-| `WHISPER_PROMPT` | `whisper` CLI / OpenAI API | — | `Doha, Smiles, Livelo, Latam, milheiro` |
-| `WHISPER_BIN` | `whisper` CLI | `whisper` (on PATH) | `C:/.../Scripts/whisper.exe` |
-| `WHISPER_DEVICE` | `whisper` CLI (sent only if set) | — | `cuda`, `cpu` |
-| `WHISPER_COMPUTE` | `whisper-ctranslate2` only | — | `float16`, `int8_float16`, `int8` |
-| `WHISPER_BEAM_SIZE` | `whisper` CLI (sent only if set) | — | `5` |
-| `WHISPER_WORD_TIMESTAMPS` | `whisper` CLI (sent only if set) | off | `1` |
-| `WHISPER_HF_MODEL` | HF transformers (opt-in) | — (strategy off) | `Xenova/whisper-small` |
-| `OPENAI_API_KEY` | OpenAI API | — | `sk-…` |
+| Env var                   | Applies to                       | Default             | Example                                 |
+| ------------------------- | -------------------------------- | ------------------- | --------------------------------------- |
+| `WHISPER_MODEL`           | `whisper` CLI                    | `tiny`              | `small`, `medium`                       |
+| `WHISPER_LANGUAGE`        | `whisper` CLI / OpenAI API       | auto-detect         | `pt`, `en`, `es`                        |
+| `WHISPER_PROMPT`          | `whisper` CLI / OpenAI API       | —                   | `Doha, Smiles, Livelo, Latam, milheiro` |
+| `WHISPER_BIN`             | `whisper` CLI                    | `whisper` (on PATH) | `C:/.../Scripts/whisper.exe`            |
+| `WHISPER_DEVICE`          | `whisper` CLI (sent only if set) | —                   | `cuda`, `cpu`                           |
+| `WHISPER_COMPUTE`         | `whisper-ctranslate2` only       | —                   | `float16`, `int8_float16`, `int8`       |
+| `WHISPER_BEAM_SIZE`       | `whisper` CLI (sent only if set) | —                   | `5`                                     |
+| `WHISPER_WORD_TIMESTAMPS` | `whisper` CLI (sent only if set) | off                 | `1`                                     |
+| `WHISPER_HF_MODEL`        | HF transformers (opt-in)         | — (strategy off)    | `Xenova/whisper-small`                  |
+| `OPENAI_API_KEY`          | OpenAI API                       | —                   | `sk-…`                                  |
 
 > The default `tiny` model is fast but weak for non-English audio. For Portuguese (or other non-English) sources, install the CLI and set `WHISPER_MODEL=small` (or `medium`) + `WHISPER_LANGUAGE=pt` for much better accuracy. Add `WHISPER_PROMPT` with a domain glossary (brand/place names) to fix proper nouns. You can also override `model`/`language`/`initialPrompt` **per call** on `analyze_video` / `get_transcript` / `analyze_videos` — no restart needed.
 >
@@ -555,10 +558,10 @@ When a source has no native transcript (no sidecar `.vtt`/`.srt`, no embedded su
 
 Frame extraction uses a two-strategy fallback chain — no single dependency is required:
 
-| Strategy | How it works | Speed | Requirements |
-|----------|-------------|-------|-------------|
-| **yt-dlp + ffmpeg** (primary) | Downloads video, then over-samples and selects frames ([smart selection](#smart-frame-selection)) | Fast, precise | [yt-dlp](https://github.com/yt-dlp/yt-dlp) (`pip install yt-dlp`) |
-| **Browser** (fallback) | Opens video in headless Chrome, seeks to timestamps, takes screenshots | Slower, no download needed | Chrome or Chromium installed |
+| Strategy                      | How it works                                                                                      | Speed                      | Requirements                                                      |
+| ----------------------------- | ------------------------------------------------------------------------------------------------- | -------------------------- | ----------------------------------------------------------------- |
+| **yt-dlp + ffmpeg** (primary) | Downloads video, then over-samples and selects frames ([smart selection](#smart-frame-selection)) | Fast, precise              | [yt-dlp](https://github.com/yt-dlp/yt-dlp) (`pip install yt-dlp`) |
+| **Browser** (fallback)        | Opens video in headless Chrome, seeks to timestamps, takes screenshots                            | Slower, no download needed | Chrome or Chromium installed                                      |
 
 The fallback is automatic — if yt-dlp is not available, the server tries browser-based extraction via `puppeteer-core`. If neither is available, analysis still returns transcript + metadata + comments, just no frames. A third route exists when you have the file locally: pass [`localFallbackPath`](#url--local-file-fallback) and a blocked remote source is retried against it automatically.
 
@@ -576,10 +579,10 @@ Smart selection replaces "keep what fired" with over-sample → score → select
 
 **2. Score.** Each candidate gets a combined score from two signals, both normalized against the pool's own maximum:
 
-| Signal | How | Weight |
-|--------|-----|--------|
-| **Sharpness** | Laplacian variance, computed with `sharp` at a fixed 320 px width. Blur and dissolve frames smear out the edges that produce a high variance, so they sink. | `1 − frameOcrWeight` |
-| **On-screen text** | `log1p(characters) × confidence` from the OCR pass (tesseract.js, already a dependency). | `frameOcrWeight` (default `0.4`) |
+| Signal             | How                                                                                                                                                         | Weight                           |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| **Sharpness**      | Laplacian variance, computed with `sharp` at a fixed 320 px width. Blur and dissolve frames smear out the edges that produce a high variance, so they sink. | `1 − frameOcrWeight`             |
+| **On-screen text** | `log1p(characters) × confidence` from the OCR pass (tesseract.js, already a dependency).                                                                    | `frameOcrWeight` (default `0.4`) |
 
 Normalizing against the pool maximum is what keeps the text signal from punishing b-roll: on a clip where nothing is legible, every candidate scores zero for text and sharpness alone decides the ranking. The weight is configurable — raise it for screen recordings and slide decks, set it to `0` to rank on sharpness alone.
 
@@ -589,13 +592,13 @@ This exists because scoring alone has a failure mode it cannot fix: if one passa
 
 Round-robin rather than a per-bucket quota: the buckets are already sized so a longer scene contains more of them, so proportional allocation falls out of the rounds, and an empty or duplicate-only bucket simply drops out. Anything the buckets can't fill is filled globally rather than returned short.
 
-> The idea is [LVNet](https://github.com/jongwoopark7978/LVNet)'s (Park et al., *Too Many Frames, Not All Useful*), whose pipeline opens with Temporal Scene Clustering for the same reason. Its later stages score frames with CLIP against the question being asked — that needs a question up front, a GPU, and per-frame model inference, none of which belong in an MCP server. The clustering stage needs none of them.
+> The idea is [LVNet](https://github.com/jongwoopark7978/LVNet)'s (Park et al., _Too Many Frames, Not All Useful_), whose pipeline opens with Temporal Scene Clustering for the same reason. Its later stages score frames with CLIP against the question being asked — that needs a question up front, a GPU, and per-frame model inference, none of which belong in an MCP server. The clustering stage needs none of them.
 
 **4. Select.** Within that structure, greedy by score, keeping a candidate only if it is distinct from **every** frame already kept — not merely from the previous one. Distinctness needs all three of these to agree before two frames count as the same:
 
 - **On-screen text** — different legible text means different information, whatever the pixels say. (The same rule upstream's text-aware dedup already applies to overlay-only clips.)
 - **Perceptual hash** — the dHash + Hamming distance from `frame-dedup.ts`, applied pairwise across the whole pool.
-- **Mean colour** — because dHash greyscales the frame and compares each pixel to its right neighbour, so it encodes gradient and discards colour entirely: solid red, blue and green cards hash *identically*. Mean colour is the cheap signal that covers exactly that blind spot, from the `sharp` stats call the black-frame filter already makes.
+- **Mean colour** — because dHash greyscales the frame and compares each pixel to its right neighbour, so it encodes gradient and discards colour entirely: solid red, blue and green cards hash _identically_. Mean colour is the cheap signal that covers exactly that blind spot, from the `sharp` stats call the black-frame filter already makes.
 
 The distinctness rule is never relaxed — a bucket that holds nothing new contributes nothing, and the budget is filled from elsewhere.
 
@@ -603,16 +606,16 @@ The distinctness rule is never relaxed — a bucket that holds nothing new contr
 
 **Options** (`analyze_video`, `analyze_videos`; `frameSelection` also on `get_frames`):
 
-| Option | Default | Meaning |
-|--------|---------|---------|
-| `frameSelection` | `"smart"` | `"sceneChange"` restores the upstream path — scene detector only, adjacent-frame dedup. Faster, no scoring. |
-| `frameCandidateMultiplier` | `3` | Candidates generated per requested frame (1–6), capped at 90 total. Higher = better selection, slower. |
-| `frameOcrWeight` | `0.4` | Share of the score carried by on-screen text; the rest is sharpness. |
+| Option                     | Default   | Meaning                                                                                                     |
+| -------------------------- | --------- | ----------------------------------------------------------------------------------------------------------- |
+| `frameSelection`           | `"smart"` | `"sceneChange"` restores the upstream path — scene detector only, adjacent-frame dedup. Faster, no scoring. |
+| `frameCandidateMultiplier` | `3`       | Candidates generated per requested frame (1–6), capped at 90 total. Higher = better selection, slower.      |
+| `frameOcrWeight`           | `0.4`     | Share of the score carried by on-screen text; the rest is sharpness.                                        |
 
 **Cost.** OCR is what selection costs, and it is bounded three ways:
 
-- **A shortlist, not the pool.** Only the top `2 x maxFrames` candidates (hard ceiling 12) are recognized, drawn *through the buckets* so every region of the clip contributes one. The shortlist bounds what gets **read**, never what gets **selected** — see the frame-count note below.
-- **A wall-clock budget.** If the pass exceeds 12s the text signal is dropped for *every* candidate at once and a warning says so. Never for some of them — that would rank the recognized frames against zeros and bias the result toward whichever finished first.
+- **A shortlist, not the pool.** Only the top `2 x maxFrames` candidates (hard ceiling 12) are recognized, drawn _through the buckets_ so every region of the clip contributes one. The shortlist bounds what gets **read**, never what gets **selected** — see the frame-count note below.
+- **A wall-clock budget.** If the pass exceeds 12s the text signal is dropped for _every_ candidate at once and a warning says so. Never for some of them — that would rank the recognized frames against zeros and bias the result toward whichever finished first.
 - **`frameOcrWeight: 0` skips it entirely.** Weight 0 says text must not influence the ranking, so recognizing it would be pure cost. This is the escape hatch for a long or text-dense video that is taking too long.
 
 Measured on a 6-minute 1080p clip: the legacy extractor runs in 4.1s, smart selection without OCR in 4.4s, and smart selection with OCR in 5.9s. Before the shortlist existed that last figure was 20.0s — recognizing all 60 candidates at 3000px each — which was enough to time out a real export.
@@ -626,12 +629,12 @@ In `analyze_video` the results are **reused** by the pipeline's own OCR step rat
 At `detail: "standard"` the budget scales with duration, and an explicit `maxFrames` always wins:
 
 | video duration | default `maxFrames` | ≈ frames per minute |
-|---|---|---|
-| ≤ 30s | 12 | — |
-| ≤ 1 min | 20 | 20 |
-| ≤ 3 min | 30 | 10 |
-| ≤ 10 min | 45 | 9 at 5 min |
-| > 10 min | 60 | 6 at 10 min |
+| -------------- | ------------------- | ------------------- |
+| ≤ 30s          | 12                  | —                   |
+| ≤ 1 min        | 20                  | 20                  |
+| ≤ 3 min        | 30                  | 10                  |
+| ≤ 10 min       | 45                  | 9 at 5 min          |
+| > 10 min       | 60                  | 6 at 10 min         |
 
 `detail: "detailed"` pins it at 60; `detail: "brief"` extracts no frames at all.
 
@@ -639,7 +642,9 @@ Measured on a 5-minute clip with ordinary visual variation, at the default budge
 
 The one case that returns noticeably fewer is a video whose frames genuinely are near-identical — a static slide held for minutes, or a synthetic test pattern. On such a clip a 45-frame budget may return 17, because the other 28 carried nothing new. If you want them anyway, raise `frameCandidateMultiplier` (more candidates to choose from) — but the usual reason for a low count is that the extra frames would have been redundant.
 
-**If an export is still too slow, the cause is almost certainly transcription, not frames.** Measured on a 6.5-minute 1080p talk: probing, scene detection, uniform sampling, scoring and selection of 45 frames take **9 seconds** in total. Whisper on the same file takes *minutes* on CPU — long enough to exceed an MCP client's tool timeout, which is what makes a call fail with no result at all.
+**If an export is still too slow, the cause is almost certainly transcription, not frames.** Measured on a 6.5-minute 1080p talk: probing, scene detection, uniform sampling, scoring and selection of 45 frames take **9 seconds** in total. Whisper on the same file takes _minutes_ on CPU — long enough to exceed an MCP client's tool timeout, which is what makes a call fail with no result at all.
+
+**Every long step reports progress at least every 10 seconds** — transcription, and frame selection (which decodes the whole file twice and scores every candidate: measured at 29 seconds of silence on a 12-minute 1080p video before it had a heartbeat). On an 8:23 video with nothing cached, no silent gap now exceeds 11 seconds.
 
 **The tool reports progress every 10 seconds while transcribing**, naming the audio length, a rough estimate and the elapsed time:
 
@@ -654,7 +659,7 @@ Three things follow, and they are easy to misread:
 
 - **A timed-out call is not lost work.** The client stops waiting; the server does not stop working. Transcription runs to completion and the result is cached (below), so **asking again is the fix** — the second call reuses the transcript and finishes in seconds.
 - **Retrying immediately with lighter options is the one thing that makes it worse.** It abandons the run in progress and starts over, so a working export becomes a loop of timeouts. The server instructions tell the agent this explicitly, along with checking `get_metadata` first (fast, no download) so it can tell you the expected wait before starting rather than discovering it.
-- **`detail: "brief"` appearing to "work" is not evidence that frames are broken.** Brief skips frame extraction *and* is fast enough to return, so a run that succeeds without frames looks like a frame failure when it is a transcription timeout.
+- **`detail: "brief"` appearing to "work" is not evidence that frames are broken.** Brief skips frame extraction _and_ is fast enough to return, so a run that succeeds without frames looks like a frame failure when it is a transcription timeout.
 
 Levers, in order of impact: ask again (warm cache), `detail: "brief"` if you only want the transcript, `frameOcrWeight: 0`, `frameSelection: "sceneChange"`, a smaller `maxFrames`. Or run the [CLI](#cli-one-shot-no-mcp-client), which has no client timeout at all — `--zip <dir>` produces the same bundle and simply takes as long as it takes.
 
@@ -677,7 +682,7 @@ Every video tool — `analyze_video`, `get_transcript`, `get_metadata`, `get_fra
 ```jsonc
 {
   "url": "https://www.youtube.com/watch?v=jNQXAC9IVRw",
-  "localFallbackPath": "/Users/me/Movies/jNQXAC9IVRw.mp4"
+  "localFallbackPath": "/Users/me/Movies/jNQXAC9IVRw.mp4",
 }
 ```
 
@@ -696,7 +701,7 @@ Never silent: the warning is how you know which source actually answered.
 
 What counts as "a local copy can fix it": a failed or blocked download, missing yt-dlp, an unusable cookie source, a 4xx/5xx, a DNS or timeout error, a metadata/transcript fetch that failed, or an extraction that produced no frames. What does **not**: an invalid timestamp, a backwards time range, an unsupported URL, a comments fetch that 404'd (a local file has no comments either), or a video that simply has no transcript. Those are reported as themselves rather than retried against a different file — retrying a mistake in the call would only bury the real error under a second copy of it.
 
-The fallback covers both shapes of failure this codebase produces: a thrown error, and — more commonly — a *successful* call that degraded around the failure and explained itself in `warnings[]`. Watching only for exceptions would miss the case it exists for.
+The fallback covers both shapes of failure this codebase produces: a thrown error, and — more commonly — a _successful_ call that degraded around the failure and explained itself in `warnings[]`. Watching only for exceptions would miss the case it exists for.
 
 CLI equivalent: `--local-fallback <path>`. Not wired into the batch `analyze_videos`, which takes a list of URLs and has no per-item place to put a path.
 
@@ -713,7 +718,7 @@ demo.zip
 └── transcript.md
 ```
 
-Ask for it in the words you'd naturally use — *"export this video"*, *"save the frames"*, *"give me a zip"*, *"put the images in a folder"* — and the agent calls it. It returns the archive's absolute path, its size, and a manifest:
+Ask for it in the words you'd naturally use — _"export this video"_, _"save the frames"_, _"give me a zip"_, _"put the images in a folder"_ — and the agent calls it. It returns the archive's absolute path, its size, and a manifest:
 
 ```json
 {
@@ -728,7 +733,7 @@ Ask for it in the words you'd naturally use — *"export this video"*, *"save th
 }
 ```
 
-**The file lands on disk, not in the chat.** An MCP server talks to its client over stdio and cannot hand it a binary payload. The protocol *can* carry a base64 blob — but a client will not turn an opaque `application/zip` into a save-able download, and encoding a multi-megabyte archive would cost more context than the analysis it packages while still leaving you without a file. So "returns a zip" means "writes a zip and tells you exactly where".
+**The file lands on disk, not in the chat.** An MCP server talks to its client over stdio and cannot hand it a binary payload. The protocol _can_ carry a base64 blob — but a client will not turn an opaque `application/zip` into a save-able download, and encoding a multi-megabyte archive would cost more context than the analysis it packages while still leaving you without a file. So "returns a zip" means "writes a zip and tells you exactly where".
 
 Which is why the response carries **`revealCommand`** as well as the path — a runnable command (`open -R` on macOS, `explorer /select,` on Windows, `xdg-open` on Linux) that opens your file manager with the archive already selected. The default location is a cache directory, and a cache path nobody can navigate to by hand is only nominally a deliverable.
 
@@ -742,7 +747,7 @@ Details worth knowing:
 - **Writes are atomic**: the archive goes to a scratch file and is renamed into place, so an interrupted export never leaves a truncated `.zip` where a good one used to be.
 - Accepts every `analyze_video` option (`detail`, `maxFrames`, `maxWidth`, `frameSelection`, …) and the same `localFallbackPath`.
 
-Use `analyze_video` to *answer questions* about a video — it returns the frames inline where the model can see them. `export_video_bundle` deliberately does not, so the agent cannot read the frames it just packaged.
+Use `analyze_video` to _answer questions_ about a video — it returns the frames inline where the model can see them. `export_video_bundle` deliberately does not, so the agent cannot read the frames it just packaged.
 
 CLI equivalent — `--zip <path>`, which writes the archive in addition to the usual `--out` frame copies:
 
@@ -756,11 +761,11 @@ The archive is built with a small dependency-free ZIP writer (`src/utils/zip.ts`
 
 After frame extraction, the pipeline automatically applies:
 
-| Step | What it does | Why |
-|------|-------------|-----|
-| **Frame deduplication** | Removes near-identical consecutive frames using perceptual hashing (dHash + Hamming distance). Runs after [smart selection](#smart-frame-selection), which has already enforced pairwise distinctness across the whole candidate pool. | Screencasts often have long static moments — dedup removes redundant frames, saving tokens |
-| **OCR** | Extracts text visible on screen from each frame (via tesseract.js). Each frame is first preprocessed — grayscale + 2× upscale + contrast normalization + sharpen — which materially improves accuracy on stylized overlays (prices, dates, coupons, CTAs). | Captures code, error messages, terminal output, UI text that the transcript doesn't cover |
-| **Annotated timeline** | Merges transcript timestamps + frame timestamps + OCR text into a single chronological view | Gives the AI a unified "what was said, what changed visually, and what text appeared" at each moment |
+| Step                    | What it does                                                                                                                                                                                                                                               | Why                                                                                                  |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| **Frame deduplication** | Removes near-identical consecutive frames using perceptual hashing (dHash + Hamming distance). Runs after [smart selection](#smart-frame-selection), which has already enforced pairwise distinctness across the whole candidate pool.                     | Screencasts often have long static moments — dedup removes redundant frames, saving tokens           |
+| **OCR**                 | Extracts text visible on screen from each frame (via tesseract.js). Each frame is first preprocessed — grayscale + 2× upscale + contrast normalization + sharpen — which materially improves accuracy on stylized overlays (prices, dates, coupons, CTAs). | Captures code, error messages, terminal output, UI text that the transcript doesn't cover            |
+| **Annotated timeline**  | Merges transcript timestamps + frame timestamps + OCR text into a single chronological view                                                                                                                                                                | Gives the AI a unified "what was said, what changed visually, and what text appeared" at each moment |
 
 The OCR step requires `tesseract.js` (included as a dependency). If it fails to load, analysis continues without OCR — no frames or transcript are lost. OCR preprocessing is on by default; set `MCP_OCR_PREPROCESS=0` to OCR the raw frames instead.
 
@@ -770,22 +775,22 @@ OCR always reads the **full-resolution** frame, not the copy emitted to the clie
 
 Two knobs, and they cost nothing in time — only in bytes:
 
-| option | default | notes |
-|---|---|---|
-| `maxWidth` | `800` (or `MCP_FRAME_MAX_WIDTH`); `0` = source resolution | **`export_video_bundle` defaults to `0`** |
-| `frameQuality` | `70` (or `MCP_FRAME_JPEG_QUALITY`) | **`export_video_bundle` defaults to `90`** |
+| option         | default                                                   | notes                                      |
+| -------------- | --------------------------------------------------------- | ------------------------------------------ |
+| `maxWidth`     | `800` (or `MCP_FRAME_MAX_WIDTH`); `0` = source resolution | **`export_video_bundle` defaults to `0`**  |
+| `frameQuality` | `70` (or `MCP_FRAME_JPEG_QUALITY`)                        | **`export_video_bundle` defaults to `90`** |
 
 Measured on a 1080p UI capture, 45 frames:
 
-| setting | encode time | width | archive |
-|---|---|---|---|
-| 800px q70 | 0.5s | 800 | 1.5 MB |
-| 1600px q85 | 0.7s | 1600 | 5.1 MB |
-| source q90 | **0.5s** | 1920 | 7.0 MB |
+| setting    | encode time | width | archive |
+| ---------- | ----------- | ----- | ------- |
+| 800px q70  | 0.5s        | 800   | 1.5 MB  |
+| 1600px q85 | 0.7s        | 1600  | 5.1 MB  |
+| source q90 | **0.5s**    | 1920  | 7.0 MB  |
 
 Re-encoding costs the same at any size, because the expensive part is decoding the frame, not writing it. So the downscale never bought speed — it bounds **context**, which is a real cost when `analyze_video` inlines frames into the conversation and no cost at all for a zip nobody feeds to a model.
 
-Which is why **the bundle export writes at source resolution and near-lossless quality by default**, and the inline tools do not. If you want a smaller archive, pass `maxWidth` or `frameQuality` explicitly; if you want a sharper *inline* read of a dense UI, pass `maxWidth` on the analysis tools and accept the token cost. CLI: `--max-width`, `--frame-quality`.
+Which is why **the bundle export writes at source resolution and near-lossless quality by default**, and the inline tools do not. If you want a smaller archive, pass `maxWidth` or `frameQuality` explicitly; if you want a sharper _inline_ read of a dense UI, pass `maxWidth` on the analysis tools and accept the token cost. CLI: `--max-width`, `--frame-quality`.
 
 ### Frame size (dense UI captures)
 
@@ -805,11 +810,11 @@ Supported on `analyze_video`, `analyze_videos`, `analyze_moment`, `get_frames`, 
 
 Native frames cost several times more context than the default, so raise the cap deliberately — `get_frames` returns up to 20 frames and `analyze_video` at `detailed` up to 60.
 
-| Variable | Applies to | Default | Notes |
-|---|---|---|---|
-| `MCP_FRAME_MAX_WIDTH` | Emitted frame width, in px | `800` | `0` (or `native`/`full`/`original`) disables the cap. A per-call `maxWidth` wins over it |
-| `MCP_FRAME_JPEG_QUALITY` | Emitted frame JPEG quality | `70` | Raise it when thin glyphs matter; env only, there is no per-call quality parameter. Values outside 1–100 fall back |
-| `MCP_CACHE_DIR` | Root for the tessdata cache and the CLI's default `--out` | per-user cache dir | Absolute paths only (a relative value is ignored). Use it when `$HOME` is read-only or absent — a hardened container, `ProtectHome=`, a quota'd home. The published Docker image sets it to `/tmp/mcp-video-analyzer-cache` so `--read-only --tmpfs /tmp` works out of the box |
+| Variable                 | Applies to                                                | Default            | Notes                                                                                                                                                                                                                                                                          |
+| ------------------------ | --------------------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `MCP_FRAME_MAX_WIDTH`    | Emitted frame width, in px                                | `800`              | `0` (or `native`/`full`/`original`) disables the cap. A per-call `maxWidth` wins over it                                                                                                                                                                                       |
+| `MCP_FRAME_JPEG_QUALITY` | Emitted frame JPEG quality                                | `70`               | Raise it when thin glyphs matter; env only, there is no per-call quality parameter. Values outside 1–100 fall back                                                                                                                                                             |
+| `MCP_CACHE_DIR`          | Root for the tessdata cache and the CLI's default `--out` | per-user cache dir | Absolute paths only (a relative value is ignored). Use it when `$HOME` is read-only or absent — a hardened container, `ProtectHome=`, a quota'd home. The published Docker image sets it to `/tmp/mcp-video-analyzer-cache` so `--read-only --tmpfs /tmp` works out of the box |
 
 A value either variable can't use — `1e3`, `1920px`, a quality of `150` — is rejected with a one-time warning on stderr and the default applies. It is not silently accepted: the whole point of the setting is to escape a downscale that otherwise looks like a normal result.
 
@@ -827,10 +832,10 @@ claude mcp add chrome-devtools npx @anthropic-ai/mcp-devtools@latest
 
 **When to use each:**
 
-| Scenario | Tool |
-|----------|------|
-| Bug report recorded as a Loom video | `mcp-video-analyzer` — extract transcript, frames, and error text from the recording |
-| Live debugging a web page | Chrome DevTools MCP — inspect DOM, console, network, take screenshots |
+| Scenario                                   | Tool                                                                                  |
+| ------------------------------------------ | ------------------------------------------------------------------------------------- |
+| Bug report recorded as a Loom video        | `mcp-video-analyzer` — extract transcript, frames, and error text from the recording  |
+| Live debugging a web page                  | Chrome DevTools MCP — inspect DOM, console, network, take screenshots                 |
 | Video shows UI issue, need to reproduce it | Use both: analyze the video first, then open the page in Chrome DevTools to reproduce |
 
 The two MCPs complement each other: video analyzer understands **recorded** content, DevTools interacts with **live** pages.
@@ -839,15 +844,16 @@ The two MCPs complement each other: video analyzer understands **recorded** cont
 
 The [`examples/loom-demo/`](examples/loom-demo/) folder contains **real outputs** from analyzing a public Loom video ([Boost In-App Demo Video](https://www.loom.com/share/bdebdfe44b294225ac718bad241a94fe), 2:55).
 
-| File | What it shows |
-|------|--------------|
-| [`metadata.json`](examples/loom-demo/metadata.json) | Title, duration, platform |
-| [`transcript.json`](examples/loom-demo/transcript.json) | 42 timestamped entries with speaker IDs |
-| [`timeline.json`](examples/loom-demo/timeline.json) | Unified chronological view (transcript + frames merged) |
-| [`moment-transcript-0m30s-0m45s.json`](examples/loom-demo/moment-transcript-0m30s-0m45s.json) | Filtered transcript for `analyze_moment` (0:30–0:45) |
-| [`full-analysis.json`](examples/loom-demo/full-analysis.json) | Complete `analyze_video` output |
+| File                                                                                          | What it shows                                           |
+| --------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| [`metadata.json`](examples/loom-demo/metadata.json)                                           | Title, duration, platform                               |
+| [`transcript.json`](examples/loom-demo/transcript.json)                                       | 42 timestamped entries with speaker IDs                 |
+| [`timeline.json`](examples/loom-demo/timeline.json)                                           | Unified chronological view (transcript + frames merged) |
+| [`moment-transcript-0m30s-0m45s.json`](examples/loom-demo/moment-transcript-0m30s-0m45s.json) | Filtered transcript for `analyze_moment` (0:30–0:45)    |
+| [`full-analysis.json`](examples/loom-demo/full-analysis.json)                                 | Complete `analyze_video` output                         |
 
 **Frame images** (19 total in [`examples/loom-demo/frames/`](examples/loom-demo/frames/)):
+
 - `scene_*.jpg` — scene-change detection (key visual transitions)
 - `dense_*.jpg` — 1fps dense sampling (every 10th frame saved as sample)
 - `burst_*.jpg` — burst extraction for moment analysis (0:30–0:45)

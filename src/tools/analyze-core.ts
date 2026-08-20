@@ -359,6 +359,9 @@ async function runAnalysisPipeline(
 
     if (!skipFrames) {
       tempDir = await createTempDir();
+      // Same reason as `downloaded` below: a mutable binding loses its
+      // narrowing inside a closure, and extraction runs in one.
+      const frameDir = tempDir;
       let framesExtracted = false;
 
       // Emitted frame path -> the full-resolution frame it came from, so OCR
@@ -375,11 +378,15 @@ async function runAnalysisPipeline(
       if (adapter.capabilities.videoDownload) {
         videoPath = await adapter.downloadVideo(url, tempDir, (w) => warnings.push(w));
 
-        if (videoPath) {
+        // A `const` copy, because narrowing a mutable binding does not survive
+        // into a closure — and the extraction below runs inside one.
+        const downloaded = videoPath;
+
+        if (downloaded) {
           await progress(50, 'Video downloaded, extracting frames...');
 
           if (metadata.duration === 0) {
-            const duration = await probeVideoDuration(videoPath).catch(() => 0);
+            const duration = await probeVideoDuration(downloaded).catch(() => 0);
             metadata.duration = duration;
             metadata.durationFormatted = formatTimestamp(Math.floor(duration));
           }
@@ -389,23 +396,34 @@ async function runAnalysisPipeline(
           // Smart selection subsumes `dense`: it already samples uniformly as
           // one of its two candidate sources, so the detailed level's dense
           // flag only steers the legacy path.
+          // Selection decodes the whole file twice and hashes every candidate,
+          // which on a 12-minute 1080p video is ~30 seconds with nothing to say
+          // for itself. Measured as the single largest silent stretch in the
+          // pipeline — and silence is what makes a client give up on a call
+          // that is working.
           const extraction: KeyFrameExtraction & {
             ocrByPath?: ReadonlyMap<string, IOcrResult>;
-          } =
-            frameSelection === 'smart'
-              ? await selectKeyFrames(videoPath, tempDir, {
-                  threshold,
-                  maxFrames,
-                  candidateMultiplier: params.frameCandidateMultiplier,
-                  ocrWeight: params.frameOcrWeight,
-                  useOcr: config.includeOcr,
-                  ocrLanguage,
-                })
-              : await extractKeyFrames(videoPath, tempDir, {
-                  threshold,
-                  maxFrames,
-                  dense: config.denseSampling,
-                });
+          } = await withProgressHeartbeat(
+            progress,
+            50,
+            (elapsed) =>
+              `Extracting and scoring candidate frames — ${approximateDuration(elapsed)} elapsed. Still running.`,
+            () =>
+              frameSelection === 'smart'
+                ? selectKeyFrames(downloaded, frameDir, {
+                    threshold,
+                    maxFrames,
+                    candidateMultiplier: params.frameCandidateMultiplier,
+                    ocrWeight: params.frameOcrWeight,
+                    useOcr: config.includeOcr,
+                    ocrLanguage,
+                  })
+                : extractKeyFrames(downloaded, frameDir, {
+                    threshold,
+                    maxFrames,
+                    dense: config.denseSampling,
+                  }),
+          );
           warnings.push(...extraction.warnings);
           selectionOcr = extraction.ocrByPath ?? selectionOcr;
           const rawFrames = extraction.frames;
