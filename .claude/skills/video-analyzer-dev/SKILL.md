@@ -26,6 +26,8 @@ exactly as before when the new options are absent:
   `src/processors/frame-signals.ts`) — default `frameSelection: 'smart'`.
 - **URL + local-file fallback** (`src/utils/source-fallback.ts`) — optional
   `localFallbackPath` on all seven single-video tools.
+- **Zip bundle export** (`export_video_bundle` tool, `src/utils/video-bundle.ts`,
+  `bundle-document.ts`, `zip.ts`) — `frames/` + `transcript.md` written to disk.
 
 Not published to npm. `dist/index.js` is run directly; `.mcp.json`,
 `smithery.yaml`, README and `skills/video/SKILL.md` all reflect that.
@@ -60,6 +62,7 @@ MCP server for video analysis — extracts transcripts, key frames, metadata, OC
 
 - **Adapters** (`src/adapters/`) — platform-specific logic (Loom GraphQL, yt-dlp platforms [YouTube/Vimeo/TikTok/Instagram/X/Twitch/Dailymotion/Facebook], direct URL download, TwelveLabs, local files). Each implements `IVideoAdapter`. Registered most-specific-first in `server.ts`: Loom → LocalFile → YtDlp → TwelveLabs → Direct.
 - **Processors** (`src/processors/`) — shared processing: frame extraction (ffmpeg + browser fallback), frame **selection** (`frame-selector.ts`, scoring + greedy diverse selection) over cheap per-frame signals (`frame-signals.ts`: Laplacian-variance sharpness, mean colour), image optimization + OCR preprocessing (sharp), frame dedup (dHash, visual + OCR-text-aware), OCR (tesseract.js), audio transcription (whisper), annotated timeline.
+- **Bundle export** — `writeVideoBundle()` (`src/utils/video-bundle.ts`) is the ONE implementation, shared by the `export_video_bundle` tool and the CLI's `--zip`; do not let a second copy grow (issue #24's lesson). `src/utils/zip.ts` is a dependency-free STORE-only ZIP writer: its correctness is pinned by CRC-32 check vectors from the standard (never its own output) and by extracting a real archive with the system `unzip`, which MUST pass wherever `unzip` exists rather than probe-and-skip. Archives are written to a `.partial` scratch file and renamed, so an interrupted export cannot replace a good bundle with a truncated one. Frame entry names lead with an ordinal so an alphabetical listing is chronological, and carry no `:` (Windows). `transcript.md` is emitted even for a silent clip, with the reason — an absent file reads as a broken export rather than as content.
 - **Tools** (`src/tools/`) — MCP tool definitions registered on the FastMCP server. `analyze-core.ts` holds the shared cache + pipeline (`getAnalysis`) + content builder reused by both `analyze_video` and the batch `analyze_videos`.
 - **Utils** (`src/utils/`) — URL detection, VTT parsing, temp files, in-memory + on-disk cache (`cache.ts`, `analysis-sidecar.ts`), bounded concurrency (`concurrency.ts`), env-flag parsing (`env.ts`).
 - **CLI** (`src/cli.ts`) — one-shot `analyze` subcommand (`mcp-video-analyzer analyze <url>`) reusing the same `getAnalysis` pipeline: single JSON document on stdout, progress/errors on stderr, frame JPEGs copied to `--out` (default `<user-cache>/mcp-video-analyzer/<url-hash>/` via `persistentCacheDir()`) *before* `handle.cleanup()`. `src/index.ts` dispatches on `argv[2]` — no args = MCP stdio server (Docker/smithery/MCP configs rely on this). Adapter registration is shared via `registerAllAdapters()` in `server.ts`. Version literal lives in `src/version.ts`.

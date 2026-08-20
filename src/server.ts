@@ -3,6 +3,7 @@ import { registerAllAdapters } from './adapters/register.js';
 import { registerAnalyzeMoment } from './tools/analyze-moment.js';
 import { registerAnalyzeVideo } from './tools/analyze-video.js';
 import { registerAnalyzeVideos } from './tools/analyze-videos.js';
+import { registerExportVideoBundle } from './tools/export-bundle.js';
 import { registerGetFrameAt } from './tools/get-frame-at.js';
 import { registerGetFrameBurst } from './tools/get-frame-burst.js';
 import { registerGetFrames } from './tools/get-frames.js';
@@ -23,6 +24,7 @@ AUTOMATIC BEHAVIOR — Do NOT wait for the user to ask:
 - When the user asks to compare frames or see motion → call get_frame_burst.
 - When the transcript alone would answer the question → call get_transcript (faster, no download).
 - When only metadata is needed (title, duration, comments) → call get_metadata (no download).
+- When the user asks for the frames or transcript as FILES — "export", "download", "save", "zip", "give me the images", "put it in a folder" → call export_video_bundle and give them the returned zipPath.
 
 The AI should ALWAYS call the appropriate tool automatically — never ask "would you like me to analyze this video?" Just do it.
 
@@ -48,6 +50,7 @@ Tools (choose the most efficient one for the task):
 - get_frame_at: Single frame at a timestamp. Use when the transcript reveals an interesting moment and you want to see it.
 - get_frame_burst: N frames in a narrow time range. Use for motion, animations, fast UI changes.
 - analyze_moment: Deep-dive on a time range. Combines burst frames + filtered transcript + OCR + mini-timeline. Use when the user asks about a specific part of the video.
+- export_video_bundle: Runs the same analysis and packages it as a .zip on disk — frames/ plus transcript.md — returning the archive's absolute path. Use ONLY when the user wants files they can keep; it does not return the frames inline, so you cannot see them. To answer questions about the video, use analyze_video. MCP cannot deliver a binary payload in a response, so always relay the zipPath to the user.
 
 Decision flow:
 1. User shares a video URL → analyze_video (standard)
@@ -55,7 +58,12 @@ Decision flow:
 3. User asks "what did they say about X" → get_transcript (fast, no download)
 4. User asks "how long is this video" → get_metadata (fast, no download)
 5. User asks for more detail after initial analysis → analyze_video (detailed) or analyze_moment
-6. User asks to see motion/animation → get_frame_burst`,
+6. User asks to see motion/animation → get_frame_burst
+7. User asks to export/download/save/zip the frames or transcript → export_video_bundle (then give them the zipPath)
+
+Frame selection: frames are chosen by scoring over-sampled candidates on sharpness and on-screen-text density and keeping only the visually distinct ones (options.frameSelection="smart", the default). Fewer frames than maxFrames means the video had that many distinct looks — not that extraction failed. options.frameSelection="sceneChange" restores scene-detector-only behaviour.
+
+Blocked remote sources: every single-video tool takes an optional localFallbackPath (absolute path to a local copy). If the remote source is blocked or unreachable — YouTube anti-bot, missing yt-dlp, network failure — the same operation is retried against that file and warnings[] says so. If a user shares both a link and a local file, pass both.`,
   });
 
   registerAllAdapters();
@@ -69,6 +77,7 @@ Decision flow:
   registerGetMetadata(server);
   registerGetFrames(server);
   registerAnalyzeMoment(server);
+  registerExportVideoBundle(server);
 
   return server;
 }

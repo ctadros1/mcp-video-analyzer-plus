@@ -1,0 +1,153 @@
+import { execFile } from 'node:child_process';
+import { mkdir, readFile, readdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+import { afterEach, describe, expect, it } from 'vitest';
+import { captureToolExecute, generateTestClip, noProgress } from '../../test/helpers/index.js';
+import { clearAdapters, registerAdapter } from '../adapters/adapter.interface.js';
+import { LocalFileAdapter } from '../adapters/local-file.adapter.js';
+import { cleanupTempDir, createTempDir } from '../utils/temp-files.js';
+import { registerExportVideoBundle } from './export-bundle.js';
+
+const run = promisify(execFile);
+
+interface BundleDoc {
+  zipPath: string;
+  bytes: number;
+  frameCount: number;
+  transcriptEntries: number;
+  contents: string[];
+  warnings: string[];
+}
+
+afterEach(() => {
+  clearAdapters();
+});
+
+async function exportBundle(args: Record<string, unknown>): Promise<BundleDoc> {
+  const result = await captureToolExecute(registerExportVideoBundle)(args, noProgress);
+  return JSON.parse(result.content[0].text ?? '{}') as BundleDoc;
+}
+
+async function fixture(): Promise<{ dir: string; clip: string }> {
+  const dir = await createTempDir();
+  const clip = join(dir, 'demo.mp4');
+  await generateTestClip(clip, 8, '640x480');
+  clearAdapters();
+  registerAdapter(new LocalFileAdapter());
+  return { dir, clip };
+}
+
+describe('export_video_bundle', () => {
+  /**
+   * The whole-feature outcome test: run the real pipeline on a real clip, then
+   * extract the archive with the system `unzip` and assert the FILES are there.
+   * Asserting the tool's own JSON manifest would only prove it described what
+   * it meant to write.
+   */
+  it('writes a zip holding the frames in a folder and the transcript as markdown', async () => {
+    const { dir, clip } = await fixture();
+    try {
+      const doc = await exportBundle({
+        url: clip,
+        outputPath: join(dir, 'bundle.zip'),
+        options: { maxFrames: 4 },
+      });
+
+      expect(doc.zipPath).toBe(join(dir, 'bundle.zip'));
+      expect(doc.bytes).toBeGreaterThan(0);
+      expect(doc.frameCount).toBeGreaterThan(0);
+
+      const { stdout } = await run('unzip', ['-t', doc.zipPath]);
+      expect(stdout).toMatch(/No errors detected/i);
+
+      const out = join(dir, 'extracted');
+      await mkdir(out, { recursive: true });
+      await run('unzip', ['-q', doc.zipPath, '-d', out]);
+
+      expect((await readdir(out)).sort()).toEqual(['frames', 'transcript.md']);
+
+      const frames = await readdir(join(out, 'frames'));
+      expect(frames).toHaveLength(doc.frameCount);
+      for (const frame of frames) expect(frame).toMatch(/^\d{3}_[\d-]+\.jpg$/);
+      // Alphabetical order is chronological order — the reason names lead with
+      // an ordinal rather than a timestamp.
+      expect([...frames].sort()).toEqual(frames.sort());
+
+      const markdown = await readFile(join(out, 'transcript.md'), 'utf8');
+      expect(markdown).toMatch(/^# demo\.mp4\n/);
+      expect(markdown).toContain('- **Duration:**');
+      // The clip is silent, so an empty transcript is the honest outcome — but
+      // the file must exist and explain itself.
+      expect(markdown).toContain('_No transcript available for this video._');
+
+      // Every JPEG must be a real, non-empty image, not a zero-byte entry.
+      for (const frame of frames) {
+        const bytes = await readFile(join(out, 'frames', frame));
+        expect(bytes.length).toBeGreaterThan(100);
+        expect(bytes.subarray(0, 2)).toEqual(Buffer.from([0xff, 0xd8]));
+      }
+    } finally {
+      await cleanupTempDir(dir);
+    }
+  }, 180_000);
+
+  it('names the archive from the video title when given a directory', async () => {
+    const { dir, clip } = await fixture();
+    try {
+      const target = join(dir, 'exports');
+      await mkdir(target, { recursive: true });
+
+      const doc = await exportBundle({
+        url: clip,
+        outputPath: target,
+        options: { maxFrames: 2 },
+      });
+
+      expect(doc.zipPath).toBe(join(target, 'demo.mp4.zip'));
+      expect(await readdir(target)).toEqual(['demo.mp4.zip']);
+    } finally {
+      await cleanupTempDir(dir);
+    }
+  }, 180_000);
+
+  it('appends .zip to an output path that lacks it', async () => {
+    const { dir, clip } = await fixture();
+    try {
+      const doc = await exportBundle({
+        url: clip,
+        outputPath: join(dir, 'my-export'),
+        options: { maxFrames: 2 },
+      });
+      expect(doc.zipPath).toBe(join(dir, 'my-export.zip'));
+    } finally {
+      await cleanupTempDir(dir);
+    }
+  }, 180_000);
+
+  it('leaves no .partial scratch file behind', async () => {
+    const { dir, clip } = await fixture();
+    try {
+      await exportBundle({ url: clip, outputPath: join(dir, 'b.zip'), options: { maxFrames: 2 } });
+      expect((await readdir(dir)).filter((f) => f.includes('.partial'))).toEqual([]);
+    } finally {
+      await cleanupTempDir(dir);
+    }
+  }, 180_000);
+
+  it('rejects a relative outputPath — the server cwd is unpredictable', async () => {
+    const { dir, clip } = await fixture();
+    try {
+      await expect(
+        exportBundle({ url: clip, outputPath: 'bundle.zip', options: { maxFrames: 2 } }),
+      ).rejects.toThrow(/must be an absolute path/i);
+    } finally {
+      await cleanupTempDir(dir);
+    }
+  }, 180_000);
+
+  it('requires a video source', async () => {
+    await fixture();
+    await expect(exportBundle({})).rejects.toThrow(/a video source is required/i);
+  });
+});

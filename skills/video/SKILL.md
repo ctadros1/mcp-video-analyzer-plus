@@ -19,6 +19,7 @@ If the `video-analyzer` MCP server is connected in this session, call its tools 
 - Question answerable from speech alone → `get_transcript` (fast, no download)
 - Title / duration / views / comments only → `get_metadata` (no download)
 - Motion or fast UI changes → `get_frame_burst`
+- User wants the frames/transcript as FILES ("export", "download", "save", "zip") → `export_video_bundle`, then give them the returned `zipPath`. It writes a `.zip` holding `frames/` plus `transcript.md`; it does not return frames inline, so it cannot answer questions about the video
 
 **The user has a local copy of a platform video**: pass its absolute path as `localFallbackPath` alongside `url` on any of these tools. YouTube blocks unauthenticated downloads intermittently; the tool then retries against the file automatically and says so in `warnings[]` (`Remote extraction failed (…) — served this result from localFallbackPath instead.`). Passing `localFallbackPath` alone, with no `url`, reads the file directly.
 
@@ -42,7 +43,7 @@ stdout is a single JSON document: `metadata`, `transcript` (timestamped entries)
 2. Read the `frames[].filePath` images (in parallel) when the question needs visuals.
 3. Answer from transcript + OCR + frames, citing timestamps.
 
-Useful flags: `--detail brief|standard|detailed` (brief = metadata + transcript only, no frame extraction — the fast/cheap path), `--fields metadata,transcript` (filters the emitted JSON only; frames are still computed at standard detail), `--max-frames <1-60>`, `--max-width <px>` (frame width cap, default 800; `0` keeps source resolution — use it for dense UI captures whose payload is small text), `--language <code>` (force transcription language), `--out <dir>` (where frames are copied), `--force-refresh`, `--local-fallback <path>` (local copy to use if the remote source is blocked), `--frame-selection smart|sceneChange`. Run `analyze --help` on the built CLI for the full list.
+Useful flags: `--detail brief|standard|detailed` (brief = metadata + transcript only, no frame extraction — the fast/cheap path), `--fields metadata,transcript` (filters the emitted JSON only; frames are still computed at standard detail), `--max-frames <1-60>`, `--max-width <px>` (frame width cap, default 800; `0` keeps source resolution — use it for dense UI captures whose payload is small text), `--language <code>` (force transcription language), `--out <dir>` (where frames are copied), `--force-refresh`, `--local-fallback <path>` (local copy to use if the remote source is blocked), `--frame-selection smart|sceneChange`, `--zip <path>` (also write a frames+transcript `.zip`). Run `analyze --help` on the built CLI for the full list.
 
 ## Prerequisites & degradation
 

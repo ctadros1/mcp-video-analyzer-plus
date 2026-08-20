@@ -21,6 +21,7 @@ import {
 import type { ResolvedVideoSource } from './utils/source-fallback.js';
 import { persistentCacheDir } from './utils/temp-files.js';
 import { isVideoSource } from './utils/url-detector.js';
+import { writeVideoBundle } from './utils/video-bundle.js';
 import { warningReason } from './utils/warnings.js';
 
 const CLI_USAGE = `Usage: mcp-video-analyzer analyze <url-or-path> [options]
@@ -60,6 +61,10 @@ Options:
   --ocr-language <codes>  Tesseract OCR languages (default: eng+por)
   --model <name>          Whisper model override (e.g. small, medium)
   --language <code>       Forced transcription language (e.g. pt)
+  --zip <path>            Also package the result as a .zip at <path> (a
+                          directory puts it inside under the video's title):
+                          frames/ plus transcript.md. Written in addition to
+                          --out, not instead of it
   --out <dir>             Where to copy frame images (default: the per-user
                           cache dir — %LOCALAPPDATA% / ~/Library/Caches /
                           $XDG_CACHE_HOME — under mcp-video-analyzer/<url-hash>;
@@ -78,6 +83,8 @@ export interface CliInvocation {
   outDir: string | undefined;
   /** `--local-fallback`: local copy to use if the remote source fails. */
   localFallbackPath: string | undefined;
+  /** `--zip`: also write a frames+transcript archive here. */
+  zipPath: string | undefined;
   help: boolean;
 }
 
@@ -96,6 +103,7 @@ export function parseCliArgs(argv: string[]): CliInvocation {
       'frame-candidates': { type: 'string' },
       'frame-ocr-weight': { type: 'string' },
       'local-fallback': { type: 'string' },
+      zip: { type: 'string' },
       'ocr-language': { type: 'string' },
       model: { type: 'string' },
       language: { type: 'string' },
@@ -134,6 +142,7 @@ export function parseCliArgs(argv: string[]): CliInvocation {
     options,
     outDir: values.out,
     localFallbackPath: values['local-fallback'],
+    zipPath: values.zip,
     help: values.help ?? false,
   };
 }
@@ -275,8 +284,21 @@ export async function runCli(argv: string[]): Promise<number> {
 
   let frames: IFrameResult[] = [];
   let missing = 0;
+  let zipPath: string | undefined;
   const copyWarnings: string[] = [];
   try {
+    if (invocation.zipPath !== undefined) {
+      // Before copyFrames and before cleanup(): the archive reads the frames
+      // where the pipeline left them, which is the only window in which they
+      // are guaranteed to exist.
+      try {
+        const archive = await writeVideoBundle(result, resolve(invocation.zipPath));
+        zipPath = archive.path;
+      } catch (err) {
+        copyWarnings.push(`Bundle archive could not be written: ${warningReason(err)}`);
+      }
+    }
+
     if (wantFrames && result.frames.length > 0) {
       const copied = await copyFrames(
         result.frames,
@@ -311,6 +333,7 @@ export async function runCli(argv: string[]): Promise<number> {
     extraWarnings: [...fallbackWarnings, ...copyWarnings],
   });
   if (wantFrames) doc.frames = frames;
+  if (zipPath) doc.zipPath = zipPath;
 
   process.stdout.write(`${JSON.stringify(doc, null, 2)}\n`);
   return 0;

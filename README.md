@@ -16,6 +16,7 @@
 >
 > 1. **[Smart frame selection](#smart-frame-selection)** — frames are over-sampled, scored (sharpness, on-screen-text density) and selected for diversity, instead of keeping whatever ffmpeg's scene detector fired on. On by default; `frameSelection: "sceneChange"` restores the upstream path.
 > 2. **[URL + local-file fallback](#url--local-file-fallback)** — every video tool accepts an optional `localFallbackPath` and uses it automatically when the remote source is blocked or unreachable (YouTube anti-bot, missing yt-dlp, network failure).
+> 3. **[`export_video_bundle`](#exporting-a-zip-bundle)** — a ninth tool that packages the analysis as a `.zip` on disk: key frames in a `frames/` folder, the transcript as `transcript.md`.
 >
 > Both are additive: existing calls behave as before. Upstream's adapter and extraction code is deliberately left close to original so `git pull upstream main` keeps working — that surface is an active arms race against YouTube and is best tracked, not rewritten.
 >
@@ -137,6 +138,7 @@ stdout is a single JSON document — `metadata`, `transcript`, `ocrResults`, `ti
 | `--frame-candidates <n>` | Candidates generated per requested frame in smart mode, 1–6 (default `3`, capped at 90 total) |
 | `--frame-ocr-weight <w>` | Share of the smart score carried by on-screen text, 0–1 (default `0.4`) |
 | `--local-fallback <path>` | Local copy of the video, used automatically if the remote source fails — see [URL + local-file fallback](#url--local-file-fallback). Works with no positional URL too |
+| `--zip <path>` | Also package the result as a `.zip` (`frames/` + `transcript.md`) at `<path>`; a directory puts it inside under the video's title — see [Exporting a zip bundle](#exporting-a-zip-bundle) |
 | `--ocr-language <codes>` | Tesseract languages (default `eng+por`) |
 | `--model <name>` / `--language <code>` | Whisper overrides for the transcription fallback |
 | `--out <dir>` | Where frame images are copied |
@@ -155,7 +157,7 @@ Analyze this video: https://www.youtube.com/watch?v=jNQXAC9IVRw
 
 ## Tools
 
-Eight tools — the AI picks the cheapest one for the job and calls it automatically. Click any tool to expand its parameters and examples.
+Nine tools — the AI picks the cheapest one for the job and calls it automatically. Click any tool to expand its parameters and examples.
 
 All seven single-video tools (everything except the batch `analyze_videos`) accept an optional **`localFallbackPath`** alongside `url`, and use it automatically when the remote source is blocked or unreachable — see [URL + local-file fallback](#url--local-file-fallback).
 
@@ -169,6 +171,7 @@ All seven single-video tools (everything except the batch `analyze_videos`) acce
 | **`analyze_moment`** | Deep-dive on a time range (burst frames + transcript + OCR) |
 | **`get_frame_at`** | Single frame at a timestamp |
 | **`get_frame_burst`** | N frames across a narrow window (motion/animation) |
+| **`export_video_bundle`** | Packages the analysis as a `.zip` on disk — `frames/` + `transcript.md` |
 
 <details>
 <summary><b><code>analyze_video</code></b> — full video analysis</summary>
@@ -204,6 +207,24 @@ Options:
 - `forceRefresh` — bypass cache and re-analyze
 - `skipFrames` — skip frame extraction for transcript-only analysis
 - `model` / `language` / `initialPrompt` — per-call Whisper overrides for the transcription fallback (override `WHISPER_MODEL` / `WHISPER_LANGUAGE` / `WHISPER_PROMPT` for this call only — pick a heavier model or a domain glossary for one hard clip without restarting the server)
+
+</details>
+
+<details>
+<summary><b><code>export_video_bundle</code></b> — zip the frames + transcript</summary>
+
+<br>
+
+```
+> Export this video: https://youtu.be/jNQXAC9IVRw
+> Save the frames and transcript to my Desktop as a zip
+```
+
+Runs the full analysis, then writes a `.zip` containing `frames/` (the key frames, named ordinal-first with their timestamps) and `transcript.md`. Returns the archive's absolute path, size, and manifest — the file is on disk, not in the response.
+
+Options: `outputPath` (absolute file or directory; defaults to the per-user cache dir), `localFallbackPath`, and every `analyze_video` option.
+
+Full details: [Exporting a zip bundle](#exporting-a-zip-bundle).
 
 </details>
 
@@ -490,6 +511,52 @@ What counts as "a local copy can fix it": a failed or blocked download, missing 
 The fallback covers both shapes of failure this codebase produces: a thrown error, and — more commonly — a *successful* call that degraded around the failure and explained itself in `warnings[]`. Watching only for exceptions would miss the case it exists for.
 
 CLI equivalent: `--local-fallback <path>`. Not wired into the batch `analyze_videos`, which takes a list of URLs and has no per-item place to put a path.
+
+### Exporting a zip bundle
+
+`export_video_bundle` runs the same analysis as `analyze_video` and writes the result to disk as an ordinary `.zip`:
+
+```
+demo.zip
+├── frames/
+│   ├── 001_0-04.jpg
+│   ├── 002_0-11.jpg
+│   └── 003_1-02-45.jpg
+└── transcript.md
+```
+
+Ask for it in the words you'd naturally use — *"export this video"*, *"save the frames"*, *"give me a zip"*, *"put the images in a folder"* — and the agent calls it. It returns the archive's absolute path, its size, and a manifest:
+
+```json
+{
+  "zipPath": "/Users/you/Desktop/demo.zip",
+  "bytes": 65730,
+  "frameCount": 5,
+  "transcriptEntries": 0,
+  "contents": ["frames/001_0-04.jpg", "…", "transcript.md"],
+  "warnings": ["…"]
+}
+```
+
+**The file lands on disk, not in the chat.** An MCP server talks to its client over stdio and cannot hand it a binary payload, so "returns a zip" means "writes a zip and tells you where". Base64-ing a multi-megabyte archive into the response was the alternative — it would cost more context than the analysis it packages and still leave you without a file.
+
+Details worth knowing:
+
+- **Frame names lead with an ordinal**, then the timestamp: `001_0-04.jpg`. A plain alphabetical listing — which is what every file browser shows — is then chronological; a timestamp-first name would sort `10:05` before `9:30`. The `:` becomes `-` because Windows rejects it in filenames.
+- **`transcript.md` always exists**, even for a silent clip, where it says so and quotes the reason. A missing file would read as a broken export rather than as a video with no speech. It carries a provenance header (source, platform, duration, uploader, resolution), the timestamped transcript, any OCR'd on-screen text, and the run's warnings.
+- **`outputPath`** takes a file path, or a directory (the archive is then named from the video's title), and defaults to the per-user cache dir under `mcp-video-analyzer/bundles/`. It must be absolute — the server's working directory is not predictable from the client.
+- **Writes are atomic**: the archive goes to a scratch file and is renamed into place, so an interrupted export never leaves a truncated `.zip` where a good one used to be.
+- Accepts every `analyze_video` option (`detail`, `maxFrames`, `maxWidth`, `frameSelection`, …) and the same `localFallbackPath`.
+
+Use `analyze_video` to *answer questions* about a video — it returns the frames inline where the model can see them. `export_video_bundle` deliberately does not, so the agent cannot read the frames it just packaged.
+
+CLI equivalent — `--zip <path>`, which writes the archive in addition to the usual `--out` frame copies:
+
+```bash
+node dist/index.js analyze "https://youtu.be/jNQXAC9IVRw" --zip ~/Desktop
+```
+
+The archive is built with a small dependency-free ZIP writer (`src/utils/zip.ts`), stored rather than deflated — the payload is JPEG frames, which are already compressed. Its output is verified against the system `unzip` in the test suite, not merely round-tripped through itself.
 
 ### Post-Processing Pipeline
 
