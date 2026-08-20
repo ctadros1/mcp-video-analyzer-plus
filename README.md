@@ -601,7 +601,17 @@ A second pass relaxes the temporal-spacing preference (never the distinctness ru
 | `frameCandidateMultiplier` | `3` | Candidates generated per requested frame (1–6), capped at 90 total. Higher = better selection, slower. |
 | `frameOcrWeight` | `0.4` | Share of the score carried by on-screen text; the rest is sharpness. |
 
-**Cost.** OCR is what selection costs, and it is bounded: at most 60 candidates are scored with it (beyond that the signal is dropped and a warning says so), and in `analyze_video` the results are **reused** by the pipeline's own OCR step rather than recomputed — so the selected frames are recognized once, not twice. `get_frames` has never run OCR and still doesn't: its smart mode scores on sharpness and diversity only, which keeps it the fast tool. Use `analyze_video` when the on-screen-text signal matters.
+**Cost.** OCR is what selection costs, and it is bounded three ways:
+
+- **A shortlist, not the pool.** Candidates are first ranked on sharpness and diversity alone; only the top `2 x maxFrames` (hard ceiling 24) are recognized. The text signal only has to separate the frames still in contention.
+- **A wall-clock budget.** If the pass exceeds 20s the text signal is dropped for *every* candidate at once and a warning says so. Never for some of them — that would rank the recognized frames against zeros and bias the result toward whichever finished first.
+- **`frameOcrWeight: 0` skips it entirely.** Weight 0 says text must not influence the ranking, so recognizing it would be pure cost. This is the escape hatch for a long or text-dense video that is taking too long.
+
+Measured on a 6-minute 1080p clip: the legacy extractor runs in 4.1s, smart selection without OCR in 4.4s, and smart selection with OCR in 5.9s. Before the shortlist existed that last figure was 20.0s — recognizing all 60 candidates at 3000px each — which was enough to time out a real export.
+
+In `analyze_video` the results are **reused** by the pipeline's own OCR step rather than recomputed, so selected frames are recognized once, not twice. `get_frames` has never run OCR and still doesn't: its smart mode scores on sharpness and diversity only, which keeps it the fast tool. Use `analyze_video` when the on-screen-text signal matters.
+
+**If an export is still too slow**, in rough order of impact: `frameOcrWeight: 0` (skips OCR ranking), `frameSelection: "sceneChange"` (the legacy path), `detail: "brief"` (metadata + transcript, no frames at all), or a smaller `maxFrames`. Whisper transcription of a long video is usually the larger cost — `skipFrames` is not the lever there, `detail: "brief"` is.
 
 `get_frames` reports which selector ran in its `mode` field: `"smart"`, `"scene"`, or `"dense"` (an explicit `dense: true` still wins — asking for uniform coverage gets uniform coverage).
 

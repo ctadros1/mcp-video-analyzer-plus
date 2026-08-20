@@ -34,14 +34,37 @@ const DEFAULT_OCR_WEIGHT = 0.4;
 const MAX_CANDIDATES = 90;
 
 /**
- * Above this many candidates the OCR signal is dropped rather than paid for.
+ * Hard ceiling on frames sent to OCR for scoring, and the multiple of the
+ * requested frame count used below it.
  *
- * OCR dominates the cost of selection (roughly a second per frame), and the
- * signal is a *relative* ranking within the pool — losing it degrades ordering,
- * never correctness, so a bounded wait is worth more than a marginally better
- * ranking on a very long video.
+ * OCR is what selection costs. Measured on a 6-minute 1080p clip, selection
+ * without it ran 4.4s against the legacy extractor's 4.1s — a rounding error —
+ * and WITH it, 20.0s. That was recognizing every one of 60 candidates, each
+ * upscaled to 3000px by `preprocessForOcr`, and it pushed a real export past
+ * the MCP client's timeout entirely.
+ *
+ * The fix is to recognize a shortlist rather than the whole pool: the text
+ * signal only has to rank the frames that are still in contention. Twice the
+ * requested count leaves real headroom for text to overturn sharpness, while
+ * cutting the work by more than half at the default budget.
  */
-const OCR_SCORING_MAX_CANDIDATES = 60;
+const OCR_SHORTLIST_MULTIPLE = 2;
+const OCR_SHORTLIST_CEILING = 24;
+
+/**
+ * Wall-clock budget for the whole OCR scoring pass.
+ *
+ * A shortlist bounds the frame COUNT, not the time per frame, and that varies
+ * by orders of magnitude with resolution and how much text is on screen. This
+ * is the backstop that keeps a pathological video from timing out the client:
+ * past the budget the text signal is abandoned for every candidate at once —
+ * never for some of them, which would rank the recognized frames against zeros
+ * and silently bias the result toward whichever ones happened to finish first.
+ */
+const OCR_SCORING_BUDGET_MS = 20_000;
+
+/** Thrown to stop `ocrFrames` once the scoring budget is spent. */
+const OCR_BUDGET_EXCEEDED = Symbol('ocr-budget-exceeded');
 
 /**
  * Scene threshold for CANDIDATE generation, as a fraction of the caller's.
@@ -359,47 +382,95 @@ export async function selectKeyFrames(
   );
   const colors = await Promise.all(candidates.map((frame) => meanColor(frame.filePath)));
 
-  let ocrResults: IOcrResult[] = [];
-  const wantsOcr = options.useOcr ?? true;
-  if (wantsOcr && candidates.length <= OCR_SCORING_MAX_CANDIDATES) {
-    ocrResults = await ocrFrames(candidates, options.ocrLanguage).catch((e: unknown) => {
-      warnings.push(`OCR scoring unavailable: ${warningReason(e)}`);
-      return [];
-    });
-    if (ocrResults.length !== candidates.length) ocrResults = [];
-  } else if (wantsOcr) {
-    warnings.push(
-      `Smart selection skipped the OCR signal: ${candidates.length} candidates exceeds the ${OCR_SCORING_MAX_CANDIDATES}-frame scoring budget; ranked on sharpness and visual diversity only.`,
-    );
-  }
+  /** OCR results keyed by the candidate they were computed for. */
+  const ocrByFrame = new Map<IFrameResult, IOcrResult>();
 
   const scored: ScoredFrame[] = candidates.map((frame, i) => ({
     frame,
     seconds: secondsOf(frame),
     hash: hashes[i],
     sharpness: sharpness[i],
-    textScore: ocrTextScore(ocrResults[i]),
+    textScore: 0,
     color: colors[i],
-    text: normalizeOcrText(ocrResults[i]),
+    text: '',
   }));
 
-  const selected = selectDiverseFrames(scored, target, { ocrWeight: options.ocrWeight });
+  // A weight of 0 says on-screen text must not influence the ranking, so
+  // recognizing it would be pure cost. Checked before the shortlist, since it
+  // makes the entire pass unnecessary rather than merely smaller.
+  const ocrWeight = options.ocrWeight ?? DEFAULT_OCR_WEIGHT;
+  const wantsOcr = (options.useOcr ?? true) && ocrWeight > 0;
+
+  // Shortlist first, on the cheap signals alone: OCR only has to separate the
+  // frames still in contention, and the pool is where the cost lives.
+  const shortlistSize = Math.min(target * OCR_SHORTLIST_MULTIPLE, OCR_SHORTLIST_CEILING);
+  const pool = wantsOcr ? selectDiverseFrames(scored, shortlistSize, { ocrWeight: 0 }) : scored;
+
+  if (wantsOcr) {
+    const ocrResults = await ocrWithBudget(pool, options.ocrLanguage);
+    if (ocrResults === null) {
+      warnings.push(
+        `Smart selection abandoned the OCR signal after ${OCR_SCORING_BUDGET_MS / 1000}s (${pool.length} frames); ranked on sharpness and visual diversity only.`,
+      );
+    } else if (ocrResults.length !== pool.length) {
+      warnings.push(
+        'OCR scoring unavailable (tesseract.js missing or recognition aborted); ranked on sharpness and visual diversity only.',
+      );
+    } else {
+      pool.forEach((entry, i) => {
+        entry.textScore = ocrTextScore(ocrResults[i]);
+        entry.text = normalizeOcrText(ocrResults[i]);
+        if (ocrResults[i]) ocrByFrame.set(entry.frame, ocrResults[i]);
+      });
+    }
+  }
+
+  const selected = selectDiverseFrames(pool, target, { ocrWeight });
 
   const ocrByPath = new Map<string, IOcrResult>();
-  if (ocrResults.length === candidates.length) {
-    const byFrame = new Map(candidates.map((frame, i) => [frame, ocrResults[i]]));
-    for (const entry of selected) {
-      const result = byFrame.get(entry.frame);
-      if (result) ocrByPath.set(entry.frame.filePath, result);
-    }
+  for (const entry of selected) {
+    const result = ocrByFrame.get(entry.frame);
+    if (result) ocrByPath.set(entry.frame.filePath, result);
   }
 
   warnings.push(
     `Smart frame selection: scored ${candidates.length} candidates ` +
-      `(${sceneFrames.length} scene-change, ${uniformFrames.length} uniform) and kept ${selected.length}.`,
+      `(${sceneFrames.length} scene-change, ${uniformFrames.length} uniform)` +
+      `${pool.length < candidates.length ? `, OCR-ranked the top ${pool.length}` : ''} ` +
+      `and kept ${selected.length}.`,
   );
 
   return { frames: selected.map((entry) => entry.frame), warnings, ocrByPath };
+}
+
+/**
+ * Recognize `pool`, giving up if the wall-clock budget runs out.
+ *
+ * Returns null when the budget was hit — all-or-nothing on purpose. Handing
+ * back the frames that finished would rank them against zeros for the ones that
+ * did not, which is not "partial data", it is a systematically wrong ordering
+ * that favours whatever the loop reached first.
+ */
+async function ocrWithBudget(
+  pool: ScoredFrame[],
+  language: string | undefined,
+): Promise<IOcrResult[] | null> {
+  const deadline = Date.now() + OCR_SCORING_BUDGET_MS;
+  try {
+    return await ocrFrames(
+      pool.map((entry) => entry.frame),
+      language,
+      () => {
+        // The only hook `ocrFrames` offers between frames. Throwing here stops
+        // the loop and still runs its `finally`, so the worker is terminated
+        // rather than left alive holding a language model.
+        if (Date.now() > deadline) throw OCR_BUDGET_EXCEEDED;
+      },
+    );
+  } catch (error: unknown) {
+    if (error === OCR_BUDGET_EXCEEDED) return null;
+    return [];
+  }
 }
 
 /**
