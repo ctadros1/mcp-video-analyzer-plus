@@ -153,6 +153,15 @@ export interface SelectionTuning {
   minHammingDistance?: number;
   /** Explicit spacing floor in seconds; derived from the clip span when unset. */
   minTimeGapSeconds?: number;
+  /**
+   * Ascending bucket edges in seconds, enabling temporal scene clustering.
+   *
+   * When present, selection takes the best frame from each bucket in turn
+   * instead of ranking globally — see {@link buildSceneBuckets}. The spacing
+   * floor is then redundant and ignored: the buckets already impose the spread
+   * it was approximating.
+   */
+  sceneBuckets?: number[];
 }
 
 /**
@@ -234,10 +243,120 @@ export function selectDiverseFrames(
     }
   };
 
-  admit(minGap);
-  if (kept.length < target && minGap > 0) admit(0);
+  const buckets = tuning.sceneBuckets;
+  if (buckets && buckets.length > 0) {
+    admitByBucket(scored, buckets, target, minHamming, kept, taken);
+    // Whatever the buckets could not fill — because a scene held nothing but
+    // duplicates, or held nothing at all — is filled globally rather than
+    // returned short.
+    if (kept.length < target) admit(0);
+  } else {
+    admit(minGap);
+    if (kept.length < target && minGap > 0) admit(0);
+  }
 
   return kept.sort((a, b) => a.seconds - b.seconds);
+}
+
+/**
+ * Temporal scene clustering: take the best frame from each bucket in turn.
+ *
+ * Ranking globally has a failure mode that no amount of scoring fixes — if one
+ * passage of the video is sharper or more text-dense than the rest, it wins
+ * every comparison and the whole budget lands inside it, leaving the rest of
+ * the clip unrepresented. A minimum spacing rule only approximates the fix.
+ *
+ * Bucketing states it directly: partition the timeline, then let each partition
+ * put forward its own best. Round-robin rather than a per-bucket quota, because
+ * the buckets are already sized so that a longer scene contains more of them —
+ * proportional allocation then falls out of the rounds instead of needing to be
+ * computed, and an empty or duplicate-only bucket simply drops out.
+ *
+ * The idea is LVNet's (Park et al., "Too Many Frames, Not All Useful"), whose
+ * pipeline opens with Temporal Scene Clustering for the same reason. Its later
+ * stages score frames with CLIP against the question being asked; those need a
+ * question, a GPU and per-frame model inference, none of which belong in this
+ * server. The clustering stage needs none of them.
+ */
+function admitByBucket(
+  scored: { candidate: ScoredFrame; score: number }[],
+  buckets: number[],
+  target: number,
+  minHamming: number,
+  kept: ScoredFrame[],
+  taken: Set<ScoredFrame>,
+): void {
+  const byBucket = new Map<number, ScoredFrame[]>();
+  for (const { candidate } of scored) {
+    const index = bucketOf(candidate.seconds, buckets);
+    const bucket = byBucket.get(index);
+    if (bucket) bucket.push(candidate);
+    else byBucket.set(index, [candidate]);
+  }
+
+  // `scored` is already in descending score order, so each bucket inherits it.
+  const ordered = [...byBucket.entries()].sort((a, b) => a[0] - b[0]).map(([, list]) => list);
+  const cursors = new Array<number>(ordered.length).fill(0);
+
+  let progressed = true;
+  while (kept.length < target && progressed) {
+    progressed = false;
+    for (let b = 0; b < ordered.length && kept.length < target; b++) {
+      const list = ordered[b];
+      while (cursors[b] < list.length) {
+        const candidate = list[cursors[b]++];
+        if (taken.has(candidate)) continue;
+        if (!isDistinct(candidate, kept, minHamming, 0)) continue;
+        kept.push(candidate);
+        taken.add(candidate);
+        progressed = true;
+        break;
+      }
+    }
+  }
+}
+
+/** Index of the bucket a timestamp falls in; `buckets` are ascending edges. */
+function bucketOf(seconds: number, buckets: number[]): number {
+  let index = 0;
+  while (index < buckets.length && seconds >= buckets[index]) index++;
+  return index;
+}
+
+/**
+ * Bucket edges for {@link selectDiverseFrames}: scene cuts, subdivided so there
+ * are roughly as many buckets as frames requested.
+ *
+ * Scene cuts alone are too coarse — a two-scene clip asked for twelve frames
+ * would spread across two buckets and cluster freely inside each. Subdividing
+ * each scene in proportion to its length is the "uniform subsampling within
+ * each scene" half of the idea, and it means a clip with NO cuts at all (a
+ * screen recording that only ever changes gradually) still gets even coverage
+ * rather than none.
+ */
+export function buildSceneBuckets(
+  cuts: number[],
+  span: [number, number],
+  target: number,
+): number[] {
+  const [start, end] = span;
+  const total = end - start;
+  if (!(total > 0) || target <= 1) return [];
+
+  const inner = [...new Set(cuts.filter((c) => c > start && c < end))].sort((a, b) => a - b);
+  const bounds = [start, ...inner, end];
+
+  const edges: number[] = [];
+  for (let i = 0; i < bounds.length - 1; i++) {
+    const from = bounds[i];
+    const to = bounds[i + 1];
+    const share = (to - from) / total;
+    const parts = Math.max(1, Math.round(target * share));
+    for (let p = 1; p < parts; p++) edges.push(from + ((to - from) * p) / parts);
+    if (i < bounds.length - 2) edges.push(to);
+  }
+
+  return edges.sort((a, b) => a - b);
 }
 
 /**
@@ -425,7 +544,18 @@ export async function selectKeyFrames(
     }
   }
 
-  const selected = selectDiverseFrames(pool, target, { ocrWeight });
+  // Temporal scene clustering: the relaxed scene detector's own hits are the
+  // cut list, subdivided to roughly one bucket per requested frame. A clip with
+  // no cuts still buckets — evenly, by time — which is exactly the case that
+  // used to return frames from whichever passage happened to score highest.
+  const secondsOfAll = scored.map((entry) => entry.seconds);
+  const sceneBuckets = buildSceneBuckets(
+    sceneFrames.map(secondsOf),
+    [Math.min(...secondsOfAll), Math.max(...secondsOfAll)],
+    target,
+  );
+
+  const selected = selectDiverseFrames(pool, target, { ocrWeight, sceneBuckets });
 
   const ocrByPath = new Map<string, IOcrResult>();
   for (const entry of selected) {
@@ -436,7 +566,8 @@ export async function selectKeyFrames(
   warnings.push(
     `Smart frame selection: scored ${candidates.length} candidates ` +
       `(${sceneFrames.length} scene-change, ${uniformFrames.length} uniform)` +
-      `${pool.length < candidates.length ? `, OCR-ranked the top ${pool.length}` : ''} ` +
+      `${pool.length < candidates.length ? `, OCR-ranked the top ${pool.length}` : ''}` +
+      `${sceneBuckets.length > 0 ? `, spread across ${sceneBuckets.length + 1} temporal buckets` : ''} ` +
       `and kept ${selected.length}.`,
   );
 

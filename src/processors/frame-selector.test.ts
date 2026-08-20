@@ -13,6 +13,7 @@ import { parseTimestamp } from './frame-extractor.js';
 import type { IOcrResult } from './frame-ocr.js';
 import {
   areDuplicates,
+  buildSceneBuckets,
   ocrTextScore,
   selectDiverseFrames,
   selectKeyFrames,
@@ -257,6 +258,105 @@ describe('selectDiverseFrames', () => {
     const first = selectDiverseFrames(pool, 3).map((k) => k.seconds);
     const second = selectDiverseFrames(pool, 3).map((k) => k.seconds);
     expect(first).toEqual(second);
+  });
+});
+
+describe('buildSceneBuckets', () => {
+  it('splits a cut-free clip evenly, so a gradual video still gets coverage', () => {
+    // The case that has no scene cuts at all: a screen recording that only ever
+    // changes gradually. Without buckets it is ranked globally and the budget
+    // lands wherever the score happens to peak.
+    const edges = buildSceneBuckets([], [0, 100], 4);
+    expect(edges).toEqual([25, 50, 75]);
+  });
+
+  it('keeps every scene cut as a boundary', () => {
+    const edges = buildSceneBuckets([30], [0, 100], 2);
+    expect(edges).toContain(30);
+  });
+
+  it('subdivides scenes in proportion to their length', () => {
+    // One long scene and one short: the long one must not collapse to a single
+    // bucket just because it is one "scene".
+    const edges = buildSceneBuckets([80], [0, 100], 5);
+    expect(edges).toContain(80);
+    expect(edges.filter((e) => e < 80).length).toBeGreaterThan(edges.filter((e) => e > 80).length);
+  });
+
+  it('returns no buckets when there is nothing to divide', () => {
+    expect(buildSceneBuckets([], [0, 0], 5)).toEqual([]);
+    expect(buildSceneBuckets([], [0, 100], 1)).toEqual([]);
+  });
+
+  it('ignores cuts outside the clip span', () => {
+    expect(buildSceneBuckets([-10, 500], [0, 100], 2)).not.toContain(500);
+  });
+});
+
+describe('selectDiverseFrames with temporal scene clustering', () => {
+  /**
+   * The failure global ranking cannot fix: one passage is sharper than the rest,
+   * so it wins every comparison and takes the entire budget. Buckets make each
+   * region put forward its own best instead.
+   */
+  it('takes frames from every region, not just the sharpest passage', () => {
+    const pool = [
+      // A brilliant opening: eight frames, all sharper than anything later.
+      ...Array.from({ length: 8 }, (_, i) =>
+        candidate({ seconds: i, hash: hash(i * 17), sharpness: 1000 - i }),
+      ),
+      // ...and a duller remainder that still needs representing.
+      ...Array.from({ length: 8 }, (_, i) =>
+        candidate({ seconds: 50 + i, hash: hash(140 + i * 13), sharpness: 100 - i }),
+      ),
+    ];
+
+    const globalOnly = selectDiverseFrames(pool, 4, { minTimeGapSeconds: 0 });
+    expect(globalOnly.every((k) => k.seconds < 50)).toBe(true); // all from the opening
+
+    const bucketed = selectDiverseFrames(pool, 4, {
+      sceneBuckets: buildSceneBuckets([], [0, 57], 4),
+    });
+    expect(bucketed.filter((k) => k.seconds < 50).length).toBeGreaterThan(0);
+    expect(bucketed.filter((k) => k.seconds >= 50).length).toBeGreaterThan(0);
+  });
+
+  it('still picks the best frame WITHIN each bucket', () => {
+    const pool = [
+      candidate({ seconds: 1, hash: hash(0x01), sharpness: 10 }),
+      candidate({ seconds: 4, hash: hash(0x02), sharpness: 900 }),
+      candidate({ seconds: 51, hash: hash(0xf1), sharpness: 20 }),
+      candidate({ seconds: 54, hash: hash(0xf2), sharpness: 800 }),
+    ];
+
+    const kept = selectDiverseFrames(pool, 2, { sceneBuckets: [50] });
+    expect(kept.map((k) => k.seconds)).toEqual([4, 54]);
+  });
+
+  it('fills from elsewhere rather than returning short when a bucket is empty', () => {
+    const pool = Array.from({ length: 5 }, (_, i) =>
+      candidate({ seconds: i, hash: hash(i * 41), sharpness: 500 + i }),
+    );
+    // Buckets cover 0-100 but every candidate sits in the first one.
+    expect(selectDiverseFrames(pool, 4, { sceneBuckets: [25, 50, 75] })).toHaveLength(4);
+  });
+
+  it('never admits a duplicate to satisfy a bucket', () => {
+    const pool = [
+      candidate({ seconds: 0, hash: hash(0x00) }),
+      candidate({ seconds: 60, hash: hash(0x00) }), // identical to the first
+    ];
+    expect(selectDiverseFrames(pool, 2, { sceneBuckets: [30] })).toHaveLength(1);
+  });
+
+  it('returns bucketed results in chronological order', () => {
+    const pool = [
+      candidate({ seconds: 70, hash: hash(0xa0), sharpness: 900 }),
+      candidate({ seconds: 10, hash: hash(0x0a), sharpness: 500 }),
+      candidate({ seconds: 40, hash: hash(0x50), sharpness: 700 }),
+    ];
+    const kept = selectDiverseFrames(pool, 3, { sceneBuckets: [30, 60] });
+    expect(kept.map((k) => k.seconds)).toEqual([10, 40, 70]);
   });
 });
 

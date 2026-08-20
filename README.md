@@ -583,13 +583,21 @@ Smart selection replaces "keep what fired" with over-sample → score → select
 
 Normalizing against the pool maximum is what keeps the text signal from punishing b-roll: on a clip where nothing is legible, every candidate scores zero for text and sharpness alone decides the ranking. The weight is configurable — raise it for screen recordings and slide decks, set it to `0` to rank on sharpness alone.
 
-**3. Select.** Greedy, highest score first, keeping a candidate only if it is distinct from **every** frame already kept — not merely from the previous one. Distinctness needs all three of these to agree before two frames count as the same:
+**3. Cluster temporally.** The timeline is partitioned into buckets — scene cuts as boundaries, each scene subdivided in proportion to its length so there are roughly as many buckets as frames requested — and selection takes each bucket's own best in turn.
+
+This exists because scoring alone has a failure mode it cannot fix: if one passage is sharper or more text-dense than the rest, it wins every comparison and the entire budget lands inside it. In the test fixture for this, a global ranking puts **all four** frames in the opening eight seconds of a 57-second clip; bucketed selection spreads them. A clip with no scene cuts at all — a screen recording that only ever changes gradually — still buckets, evenly by time, so it gets coverage instead of a cluster.
+
+Round-robin rather than a per-bucket quota: the buckets are already sized so a longer scene contains more of them, so proportional allocation falls out of the rounds, and an empty or duplicate-only bucket simply drops out. Anything the buckets can't fill is filled globally rather than returned short.
+
+> The idea is [LVNet](https://github.com/jongwoopark7978/LVNet)'s (Park et al., *Too Many Frames, Not All Useful*), whose pipeline opens with Temporal Scene Clustering for the same reason. Its later stages score frames with CLIP against the question being asked — that needs a question up front, a GPU, and per-frame model inference, none of which belong in an MCP server. The clustering stage needs none of them.
+
+**4. Select.** Within that structure, greedy by score, keeping a candidate only if it is distinct from **every** frame already kept — not merely from the previous one. Distinctness needs all three of these to agree before two frames count as the same:
 
 - **On-screen text** — different legible text means different information, whatever the pixels say. (The same rule upstream's text-aware dedup already applies to overlay-only clips.)
 - **Perceptual hash** — the dHash + Hamming distance from `frame-dedup.ts`, applied pairwise across the whole pool.
 - **Mean colour** — because dHash greyscales the frame and compares each pixel to its right neighbour, so it encodes gradient and discards colour entirely: solid red, blue and green cards hash *identically*. Mean colour is the cheap signal that covers exactly that blind spot, from the `sharp` stats call the black-frame filter already makes.
 
-A second pass relaxes the temporal-spacing preference (never the distinctness rule) if the first pass came up short, so a clip whose content is bunched into one passage still fills the budget.
+The distinctness rule is never relaxed — a bucket that holds nothing new contributes nothing, and the budget is filled from elsewhere.
 
 > The hash is the weakest of the three and could not carry the decision alone. Measured across this repo's own fixtures, dHash spans almost no range: a 30-second moving clip tops out at 5–6 differing bits of 72, and clips whose on-screen text changes top out at 1–2. Using it at upstream's threshold of 5 as a global gate kept **one** frame out of thirty.
 
