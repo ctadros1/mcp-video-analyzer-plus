@@ -10,7 +10,7 @@ import {
   runWithLocalFallback,
   videoUrlParam,
 } from '../utils/source-fallback.js';
-import { revealCommand, writeVideoBundle } from '../utils/video-bundle.js';
+import { BUNDLE_FRAME_DEFAULTS, revealCommand, writeVideoBundle } from '../utils/video-bundle.js';
 import { warningReason } from '../utils/warnings.js';
 import { AnalyzeOptionsSchema, getAnalysis, resolveAnalyzeParams } from './analyze-core.js';
 
@@ -49,6 +49,8 @@ export function registerExportVideoBundle(server: FastMCP): void {
 
 Use this when the user asks for the frames/transcript as FILES — "export", "download", "save", "zip", "give me the images", "put it in a folder". For answering questions about a video, use analyze_video instead: it returns the frames inline where you can actually see them, which this tool does not.
 
+Frames are written at the video's SOURCE resolution and near-lossless quality by default, because archived frames never enter the model's context — the 800px/quality-70 defaults that keep analyze_video's token cost down have no purpose here and cost the same time either way. Pass options.maxWidth or options.frameQuality to get a smaller archive.
+
 Archive layout:
 - frames/001_0-04.jpg, 002_0-11.jpg, … — the extracted key frames, named ordinal-first so the folder lists in chronological order, with the timestamp in each name
 - transcript.md — the transcript with timestamps, plus a header identifying the video and any on-screen (OCR) text
@@ -74,7 +76,19 @@ TIMING — a video with no existing transcript must be transcribed, and that is 
       const progress = createProgressReporter(reportProgress);
       const { options, outputPath } = args;
       const source = resolveVideoSource(args);
-      const params = resolveAnalyzeParams(options);
+
+      // Frames in an archive never enter the model's context, so the defaults
+      // that exist to bound token cost are pure loss here: they were shrinking
+      // a 1920px screen recording to 800px and re-encoding it at quality 70 for
+      // a file nobody was going to read in a chat. Measured on a 1080p UI
+      // capture, 45 frames: 800px/q70 encodes in 0.5s, source/q90 in 0.5s —
+      // the downscale never bought time, only a smaller zip. An explicit
+      // caller value still wins, for anyone who does want a small archive.
+      const params = resolveAnalyzeParams({
+        ...options,
+        maxWidth: options?.maxWidth ?? BUNDLE_FRAME_DEFAULTS.maxWidth,
+        frameQuality: options?.frameQuality ?? BUNDLE_FRAME_DEFAULTS.frameQuality,
+      });
 
       if (outputPath !== undefined && !isAbsolute(outputPath)) {
         throw new UserError(

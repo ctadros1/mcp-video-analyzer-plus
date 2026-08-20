@@ -9,6 +9,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { clearAdapters, registerAdapter } from '../adapters/adapter.interface.js';
 import type { IVideoAdapter } from '../adapters/adapter.interface.js';
 import type { IAdapterCapabilities, IAnalysisResult, IVideoMetadata } from '../types.js';
+import { RESULT_DEFINING_KEYS } from '../utils/analysis-sidecar.js';
 import type { ResultDefiningParams } from '../utils/analysis-sidecar.js';
 import { getAnalysis, resolveAnalyzeParams } from './analyze-core.js';
 import type { AnalysisHandle, AnalyzeOptions } from './analyze-core.js';
@@ -151,7 +152,25 @@ describe('cache key covers every result-defining param', () => {
     language: { language: 'pt' },
     initialPrompt: { initialPrompt: 'Smiles glossary' },
     skipFrames: { skipFrames: false },
+    frameSelection: { frameSelection: 'sceneChange' },
+    frameCandidateMultiplier: { frameCandidateMultiplier: 5 },
+    frameOcrWeight: { frameOcrWeight: 0.9 },
+    frameQuality: { frameQuality: 95 },
   } satisfies Record<keyof ResultDefiningParams, NonNullable<AnalyzeOptions>>;
+
+  /**
+   * The `satisfies` above is a compile-time guard that never ran: tsconfig.json
+   * excludes *.test.ts (it is the build config, and tests must not reach dist/),
+   * so `npm run typecheck` never type-checked this file. Four params reached
+   * ResultDefiningParams with no row here and nothing objected.
+   *
+   * RESULT_DEFINING_KEYS is exported from a file that IS type-checked and is
+   * pinned to the interface in both directions, so walking it at runtime turns
+   * "every keyed param has a cache-miss test" back into something that can fail.
+   */
+  it('covers every result-defining param', () => {
+    expect(Object.keys(variants).sort()).toEqual([...RESULT_DEFINING_KEYS].sort());
+  });
 
   it.each(Object.entries(variants))(
     'a repeat call differing only in %s misses the cache',

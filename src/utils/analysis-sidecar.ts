@@ -71,7 +71,51 @@ export interface ResultDefiningParams {
   frameCandidateMultiplier?: number;
   /** Absent = the default OCR score weight. Smart selection only. */
   frameOcrWeight?: number;
+  /** Effective JPEG quality of the emitted frames. Absent = the 70 default. */
+  frameQuality?: number;
 }
+
+/**
+ * Every key of {@link ResultDefiningParams}, as a runtime value.
+ *
+ * The interface alone cannot be enumerated at runtime, which is why the
+ * cache-key coverage test in `analyze-core.test.ts` pinned the key set with a
+ * `satisfies Record<keyof ResultDefiningParams, ...>` — a compile-time guard
+ * that turned out never to run. `tsconfig.json` excludes `*.test.ts` (correctly:
+ * it is the BUILD config and tests must not reach `dist/`), so `npm run
+ * typecheck` never saw that file, and three params were added without a
+ * cache-key row while everything stayed green.
+ *
+ * The guard therefore lives here, in a file that IS type-checked. The two
+ * assertions below make this list and the interface mirror each other exactly,
+ * and the test walks this array at runtime — so a new param fails to compile
+ * until it is listed, and fails the suite until it has a test row.
+ */
+export const RESULT_DEFINING_KEYS = [
+  'detail',
+  'maxFrames',
+  'threshold',
+  'maxWidth',
+  'skipFrames',
+  'ocrLanguage',
+  'model',
+  'language',
+  'initialPrompt',
+  'frameSelection',
+  'frameCandidateMultiplier',
+  'frameOcrWeight',
+  'frameQuality',
+] as const;
+
+type MustBeNever<T extends never> = T;
+/** Fails to compile if a key of the interface is missing from the array. */
+type _EveryKeyListed = MustBeNever<
+  Exclude<keyof ResultDefiningParams, (typeof RESULT_DEFINING_KEYS)[number]>
+>;
+/** Fails to compile if the array names something the interface does not have. */
+type _NoPhantomKeys = MustBeNever<
+  Exclude<(typeof RESULT_DEFINING_KEYS)[number], keyof ResultDefiningParams>
+>;
 
 interface PersistedAnalysis {
   version: number;

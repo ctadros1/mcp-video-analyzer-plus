@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { mkdir, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import sharp from 'sharp';
 import { afterEach, describe, expect, it } from 'vitest';
 import { captureToolExecute, generateTestClip, noProgress } from '../../test/helpers/index.js';
 import { clearAdapters, registerAdapter } from '../adapters/adapter.interface.js';
@@ -94,6 +95,68 @@ describe('export_video_bundle', () => {
         const bytes = await readFile(join(out, 'frames', frame));
         expect(bytes.length).toBeGreaterThan(100);
         expect(bytes.subarray(0, 2)).toEqual(Buffer.from([0xff, 0xd8]));
+      }
+    } finally {
+      await cleanupTempDir(dir);
+    }
+  }, 180_000);
+
+  /**
+   * Archived frames never enter the model's context, so the 800px/quality-70
+   * defaults that keep analyze_video's token cost down are pure loss here.
+   * Measured on a 1080p capture: 45 frames encode in 0.5s either way, so the
+   * downscale was buying a smaller zip and nothing else.
+   */
+  it('writes frames at the source resolution by default', async () => {
+    const dir = await createTempDir();
+    try {
+      const clip = join(dir, 'wide.mp4');
+      await generateTestClip(clip, 4, '1280x720');
+      clearAdapters();
+      registerAdapter(new LocalFileAdapter());
+
+      const doc = await exportBundle({
+        url: clip,
+        outputPath: join(dir, 'full.zip'),
+        options: { maxFrames: 2 },
+      });
+
+      const out = join(dir, 'x');
+      await mkdir(out, { recursive: true });
+      await run('unzip', ['-q', doc.zipPath, '-d', out]);
+      const frames = await readdir(join(out, 'frames'));
+
+      for (const frame of frames) {
+        const meta = await sharp(join(out, 'frames', frame)).metadata();
+        expect(meta.width).toBe(1280);
+      }
+    } finally {
+      await cleanupTempDir(dir);
+    }
+  }, 180_000);
+
+  it('still honours an explicit maxWidth for a smaller archive', async () => {
+    const dir = await createTempDir();
+    try {
+      const clip = join(dir, 'wide.mp4');
+      await generateTestClip(clip, 4, '1280x720');
+      clearAdapters();
+      registerAdapter(new LocalFileAdapter());
+
+      const doc = await exportBundle({
+        url: clip,
+        outputPath: join(dir, 'small.zip'),
+        options: { maxFrames: 2, maxWidth: 640 },
+      });
+
+      const out = join(dir, 'y');
+      await mkdir(out, { recursive: true });
+      await run('unzip', ['-q', doc.zipPath, '-d', out]);
+      const frames = await readdir(join(out, 'frames'));
+
+      for (const frame of frames) {
+        const meta = await sharp(join(out, 'frames', frame)).metadata();
+        expect(meta.width).toBe(640);
       }
     } finally {
       await cleanupTempDir(dir);

@@ -9,10 +9,20 @@ import { getAnalysis } from './tools/analyze-core.js';
 import type * as analyzeCore from './tools/analyze-core.js';
 import type { IAnalysisResult, IFrameResult } from './types.js';
 import { persistentCacheDir } from './utils/temp-files.js';
+import { BUNDLE_FRAME_DEFAULTS } from './utils/video-bundle.js';
 
 vi.mock('./tools/analyze-core.js', async (importOriginal) => {
   const actual = await importOriginal<typeof analyzeCore>();
   return { ...actual, getAnalysis: vi.fn(actual.getAnalysis) };
+});
+
+describe('bundle frame defaults', () => {
+  it('are shared, so the CLI cannot ship 800px archives while the tool ships full size', () => {
+    // The tool was raised first and the CLI was not, which shipped downscaled
+    // archives from `--zip` for a release. One constant, both call sites.
+    expect(BUNDLE_FRAME_DEFAULTS.maxWidth).toBe(0);
+    expect(BUNDLE_FRAME_DEFAULTS.frameQuality).toBeGreaterThanOrEqual(85);
+  });
 });
 
 describe('parseCliArgs', () => {

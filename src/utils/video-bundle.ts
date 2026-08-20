@@ -11,6 +11,22 @@ import type { ZipEntry } from './zip.js';
 const TRANSCRIPT_FILE = 'transcript.md';
 
 /**
+ * Frame settings for an ARCHIVED bundle, as distinct from an inlined one.
+ *
+ * The 800px / quality-70 defaults elsewhere exist to bound how much of the
+ * model's context a frame consumes. An archive is written to disk and read by a
+ * person, so that cost does not exist — and it was never a speed trade either:
+ * measured on a 1080p capture, 45 frames encode in 0.5s at 800px/q70 and 0.5s
+ * at source/q90, because the expensive part is decoding the frame rather than
+ * writing it. All the downscale bought was a smaller zip.
+ *
+ * Shared by the `export_video_bundle` tool and the CLI's `--zip`, because the
+ * CLI shipped 800px archives for a release while only the tool had been raised.
+ * An explicit caller value still wins in both.
+ */
+export const BUNDLE_FRAME_DEFAULTS = { maxWidth: 0, frameQuality: 90 } as const;
+
+/**
  * Package an analysis as a `.zip`: the key frames under `frames/`, everything
  * that was said in `transcript.md`.
  *

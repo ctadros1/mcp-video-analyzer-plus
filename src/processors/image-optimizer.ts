@@ -85,6 +85,16 @@ export function keyedFrameMaxWidth(explicit: number | undefined): number | undef
   return effective === DEFAULT_MAX_WIDTH ? undefined : effective;
 }
 
+/**
+ * The emitted-frame JPEG quality a call will actually use, in the shape the
+ * cache/sidecar key wants — the default reported as `undefined` so it drops
+ * out, exactly as {@link keyedFrameMaxWidth} does for width.
+ */
+export function keyedFrameQuality(explicit: number | undefined): number | undefined {
+  const effective = explicit ?? configuredQuality();
+  return effective === DEFAULT_QUALITY ? undefined : effective;
+}
+
 export async function optimizeFrame(
   inputPath: string,
   outputPath: string,

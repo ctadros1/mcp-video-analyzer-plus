@@ -21,7 +21,7 @@ import {
 import type { ResolvedVideoSource } from './utils/source-fallback.js';
 import { persistentCacheDir } from './utils/temp-files.js';
 import { isVideoSource } from './utils/url-detector.js';
-import { writeVideoBundle } from './utils/video-bundle.js';
+import { BUNDLE_FRAME_DEFAULTS, writeVideoBundle } from './utils/video-bundle.js';
 import { warningReason } from './utils/warnings.js';
 
 const CLI_USAGE = `Usage: mcp-video-analyzer analyze <url-or-path> [options]
@@ -58,6 +58,10 @@ Options:
                           and the original remote error are reported in
                           "warnings". Works with no positional URL too, which
                           is the same as passing the path directly
+  --frame-quality <n>     JPEG quality of emitted frames, 1-100 (default: 70,
+                          or MCP_FRAME_JPEG_QUALITY). Raise it for screen
+                          recordings; re-encoding costs the same either way,
+                          only the file size changes
   --ocr-language <codes>  Tesseract OCR languages (default: eng+por)
   --model <name>          Whisper model override (e.g. small, medium)
   --language <code>       Forced transcription language (e.g. pt)
@@ -102,6 +106,7 @@ export function parseCliArgs(argv: string[]): CliInvocation {
       'frame-selection': { type: 'string' },
       'frame-candidates': { type: 'string' },
       'frame-ocr-weight': { type: 'string' },
+      'frame-quality': { type: 'string' },
       'local-fallback': { type: 'string' },
       zip: { type: 'string' },
       'ocr-language': { type: 'string' },
@@ -130,6 +135,7 @@ export function parseCliArgs(argv: string[]): CliInvocation {
   if (values['frame-ocr-weight'] !== undefined) {
     raw.frameOcrWeight = Number(values['frame-ocr-weight']);
   }
+  if (values['frame-quality'] !== undefined) raw.frameQuality = Number(values['frame-quality']);
   if (values['ocr-language'] !== undefined) raw.ocrLanguage = values['ocr-language'];
   if (values.model !== undefined) raw.model = values.model;
   if (values.language !== undefined) raw.language = values.language;
@@ -256,7 +262,18 @@ export async function runCli(argv: string[]): Promise<number> {
     process.stderr.write(`[${Math.round(percent)}%] ${message ?? ''}\n`);
   };
 
-  const params = resolveAnalyzeParams(invocation.options);
+  // `--zip` produces an archive, and archived frames are never inlined into a
+  // model's context, so the token-cost defaults do not apply — the same
+  // reasoning (and the same constants) as the export_video_bundle tool.
+  const params = resolveAnalyzeParams(
+    invocation.zipPath === undefined
+      ? invocation.options
+      : {
+          ...invocation.options,
+          maxWidth: invocation.options?.maxWidth ?? BUNDLE_FRAME_DEFAULTS.maxWidth,
+          frameQuality: invocation.options?.frameQuality ?? BUNDLE_FRAME_DEFAULTS.frameQuality,
+        },
+  );
 
   let handle;
   let servedSource = source.primary;

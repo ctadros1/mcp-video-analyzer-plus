@@ -29,6 +29,7 @@ import { selectKeyFrames } from '../processors/frame-selector.js';
 import type { FrameSelectionMode } from '../processors/frame-selector.js';
 import {
   keyedFrameMaxWidth,
+  keyedFrameQuality,
   ocrSourceFrames,
   optimizeFramesKeepingOriginals,
 } from '../processors/image-optimizer.js';
@@ -84,6 +85,15 @@ export const AnalyzeOptionsSchema = z
       .optional()
       .describe('Skip frame extraction (transcript + metadata only)'),
     maxWidth: maxWidthParam,
+    frameQuality: z
+      .number()
+      .int()
+      .min(1)
+      .max(100)
+      .optional()
+      .describe(
+        'JPEG quality of the emitted frames, 1-100 (default: 70, or MCP_FRAME_JPEG_QUALITY). Raise it for screen recordings whose meaning lives in small text — 90 is near-lossless. Re-encoding cost is the same at any quality; only the file size changes.',
+      ),
     detail: z
       .enum(['brief', 'standard', 'detailed'])
       .optional()
@@ -158,6 +168,8 @@ export interface AnalyzeParams {
   skipFrames: boolean;
   /** `undefined` = fall back to MCP_FRAME_MAX_WIDTH, then the 800 px default. */
   maxWidth: number | undefined;
+  /** `undefined` = fall back to MCP_FRAME_JPEG_QUALITY, then the 70 default. */
+  frameQuality: number | undefined;
   ocrLanguage: string;
   forceRefresh: boolean;
   frameSelection: FrameSelectionMode;
@@ -182,6 +194,7 @@ export function resolveAnalyzeParams(options: AnalyzeOptions): AnalyzeParams {
     threshold: options?.threshold ?? 0.1,
     skipFrames: options?.skipFrames ?? !config.includeFrames,
     maxWidth: options?.maxWidth,
+    frameQuality: options?.frameQuality,
     ocrLanguage: options?.ocrLanguage ?? 'eng+por',
     forceRefresh: options?.forceRefresh ?? false,
     frameSelection: options?.frameSelection ?? 'smart',
@@ -205,6 +218,9 @@ function resultDefiningParams(params: AnalyzeParams): ResultDefiningParams {
     // not answer a later `maxWidth: 0` call, and a sidecar written under one
     // MCP_FRAME_MAX_WIDTH must not be reused after that variable changes.
     maxWidth: keyedFrameMaxWidth(params.maxWidth),
+    // Same reasoning as maxWidth: the EFFECTIVE quality keys the cache, so a
+    // result rendered at 70 cannot answer a later request for 90.
+    frameQuality: keyedFrameQuality(params.frameQuality),
     // `|| undefined` drops `false` from the JSON key: explicit false and
     // omitted mean the same framed result, so they must share one canonical
     // key (and one persisted sidecar shape — pinned in cache.e2e.test.ts).
@@ -399,6 +415,7 @@ async function runAnalysisPipeline(
           if (rawFrames.length > 0) {
             const optimized = await optimizeFramesKeepingOriginals(rawFrames, tempDir, {
               maxWidth: params.maxWidth,
+              quality: params.frameQuality,
               onWarning: (w) => warnings.push(w),
             });
             result.frames = optimized.frames;

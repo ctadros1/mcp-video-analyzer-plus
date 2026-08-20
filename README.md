@@ -766,6 +766,27 @@ The OCR step requires `tesseract.js` (included as a dependency). If it fails to 
 
 OCR always reads the **full-resolution** frame, not the copy emitted to the client. The two have different jobs: the emitted frame is capped for token cost, while recognition needs every pixel it can get.
 
+### Frame quality
+
+Two knobs, and they cost nothing in time — only in bytes:
+
+| option | default | notes |
+|---|---|---|
+| `maxWidth` | `800` (or `MCP_FRAME_MAX_WIDTH`); `0` = source resolution | **`export_video_bundle` defaults to `0`** |
+| `frameQuality` | `70` (or `MCP_FRAME_JPEG_QUALITY`) | **`export_video_bundle` defaults to `90`** |
+
+Measured on a 1080p UI capture, 45 frames:
+
+| setting | encode time | width | archive |
+|---|---|---|---|
+| 800px q70 | 0.5s | 800 | 1.5 MB |
+| 1600px q85 | 0.7s | 1600 | 5.1 MB |
+| source q90 | **0.5s** | 1920 | 7.0 MB |
+
+Re-encoding costs the same at any size, because the expensive part is decoding the frame, not writing it. So the downscale never bought speed — it bounds **context**, which is a real cost when `analyze_video` inlines frames into the conversation and no cost at all for a zip nobody feeds to a model.
+
+Which is why **the bundle export writes at source resolution and near-lossless quality by default**, and the inline tools do not. If you want a smaller archive, pass `maxWidth` or `frameQuality` explicitly; if you want a sharper *inline* read of a dense UI, pass `maxWidth` on the analysis tools and accept the token cost. CLI: `--max-width`, `--frame-quality`.
+
 ### Frame size (dense UI captures)
 
 Emitted frames are capped at 800 px wide, which suits the common case — talking-head clips, Reels, bug repros — where the subject fills the frame.
