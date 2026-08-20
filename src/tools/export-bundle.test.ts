@@ -163,6 +163,41 @@ describe('export_video_bundle', () => {
     }
   }, 180_000);
 
+  /**
+   * The bug that produced transcript-only bundles. The tool releases its temp
+   * dir once the bytes are in the archive, but getAnalysis has already cached
+   * the result with paths INTO that dir — so a second call within the cache TTL
+   * found every frame file gone and wrote an archive containing only
+   * transcript.md. Guaranteed after a timed-out first call, which is precisely
+   * when a retry happens.
+   */
+  it('still contains frames when the same export is repeated from cache', async () => {
+    const dir = await createTempDir();
+    try {
+      const clip = join(dir, 'repeat.mp4');
+      await generateTestClip(clip, 6, '640x480');
+      clearAdapters();
+      registerAdapter(new LocalFileAdapter());
+
+      const first = await exportBundle({
+        url: clip,
+        outputPath: join(dir, 'a.zip'),
+        options: { maxFrames: 3 },
+      });
+      const second = await exportBundle({
+        url: clip,
+        outputPath: join(dir, 'b.zip'),
+        options: { maxFrames: 3 },
+      });
+
+      expect(first.frameCount).toBeGreaterThan(0);
+      expect(second.frameCount).toBe(first.frameCount);
+      expect(second.contents).toContain('transcript.md');
+    } finally {
+      await cleanupTempDir(dir);
+    }
+  }, 180_000);
+
   it('names the archive from the video title when given a directory', async () => {
     const { dir, clip } = await fixture();
     try {

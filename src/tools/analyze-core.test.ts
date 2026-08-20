@@ -320,7 +320,6 @@ describe('getAnalysis OCR-before-dedup pipeline (real ffmpeg)', () => {
     // cleaned up, and a missing-file error would obscure the actual defect.
     expect(adapter.downloadVideo).toHaveBeenCalledTimes(2);
     const native = await widthsOf(second.result);
-    await second.cleanup();
 
     expect(capped.length).toBeGreaterThan(0);
     expect(capped.every((w) => w === 100)).toBe(true);
@@ -329,15 +328,31 @@ describe('getAnalysis OCR-before-dedup pipeline (real ffmpeg)', () => {
     expect(native.every((w) => w === 160)).toBe(true);
 
     // ...and the key still caches: repeating a width already analyzed must NOT
-    // re-run, or "cache miss" would just be "cache broken". (Measured by the
-    // adapter call count, not by the frames — a cache hit hands back paths into
-    // the temp dir the first call already cleaned up.)
+    // re-run, or "cache miss" would just be "cache broken".
+    //
+    // Checked BEFORE `second.cleanup()`, deliberately. A cached result records
+    // paths inside the per-call temp dir, and a hit whose frame files have been
+    // released can no longer deliver them — `getAnalysis` now treats that as a
+    // miss, because serving it produced exports containing only transcript.md.
+    // So this asserts the cache works while its frames exist; the export tests
+    // cover the released case.
     const repeat = await getAnalysis(
       url,
       resolveAnalyzeParams({ detail: 'standard', maxFrames: 2, maxWidth: 0 }),
     );
     await repeat.cleanup();
     expect(adapter.downloadVideo).toHaveBeenCalledTimes(2);
+
+    await second.cleanup();
+
+    // And once the files are gone the same key must re-run rather than hand
+    // back frames that are no longer there.
+    const afterRelease = await getAnalysis(
+      url,
+      resolveAnalyzeParams({ detail: 'standard', maxFrames: 2, maxWidth: 0 }),
+    );
+    await afterRelease.cleanup();
+    expect(adapter.downloadVideo).toHaveBeenCalledTimes(3);
     vi.unstubAllEnvs();
     // Three full real-ffmpeg pipeline runs; the 5s default is one scheduler
     // hiccup away from a flake on a loaded machine.

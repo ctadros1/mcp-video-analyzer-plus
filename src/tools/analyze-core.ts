@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { imageContent } from 'fastmcp';
 import { z } from 'zod';
 import { getAdapter } from '../adapters/adapter.interface.js';
@@ -667,6 +668,29 @@ async function runAnalysisPipeline(
 
 const noopCleanup = async (): Promise<void> => undefined;
 
+/**
+ * Whether a cached result can still deliver the frames it claims to have.
+ *
+ * A cached result records frame paths inside the per-call temp dir, and callers
+ * that finish with the images release that dir — `export_video_bundle` does,
+ * because it has copied the bytes into an archive and has nothing left to hold
+ * open. The cache entry outlives the files.
+ *
+ * That combination silently produced empty exports: a second call within the
+ * 10-minute TTL hit the cache, found every frame file gone, and wrote a bundle
+ * containing only `transcript.md`. It was guaranteed after a timed-out first
+ * call, which is exactly when a retry happens — the run completes and caches
+ * server-side while the client is no longer listening, so the retry that was
+ * supposed to be the cheap path returned a frameless archive instead.
+ *
+ * Treating that as a MISS costs one recompute and is self-healing. Serving it
+ * costs the user their frames with only a warning to explain it.
+ */
+function framesStillOnDisk(result: IAnalysisResult, params: AnalyzeParams): boolean {
+  if (params.skipFrames || result.frames.length === 0) return true;
+  return result.frames.every((frame) => existsSync(frame.filePath));
+}
+
 /** An analysis result plus a handle to release any temp files it still holds. */
 export interface AnalysisHandle {
   result: IAnalysisResult;
@@ -697,10 +721,11 @@ export async function getAnalysis(
 
   if (!params.forceRefresh) {
     const cached = cache.get(key);
-    if (cached) return { result: cached, cleanup: noopCleanup };
+    if (cached && framesStillOnDisk(cached, params))
+      return { result: cached, cleanup: noopCleanup };
 
     const fromDisk = await readAnalysisSidecar(url, keyParams);
-    if (fromDisk) {
+    if (fromDisk && framesStillOnDisk(fromDisk, params)) {
       cache.set(key, fromDisk);
       return { result: fromDisk, cleanup: noopCleanup };
     }
