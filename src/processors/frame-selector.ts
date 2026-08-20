@@ -329,15 +329,21 @@ function bucketOf(seconds: number, buckets: number[]): number {
 }
 
 /**
- * Bucket edges for {@link selectDiverseFrames}: scene cuts, subdivided so there
- * are roughly as many buckets as frames requested.
+ * Bucket edges for {@link selectDiverseFrames}: one bucket per frame requested,
+ * aligned to scene cuts wherever a cut sits close to where a boundary was going
+ * to fall anyway.
  *
- * Scene cuts alone are too coarse — a two-scene clip asked for twelve frames
- * would spread across two buckets and cluster freely inside each. Subdividing
- * each scene in proportion to its length is the "uniform subsampling within
- * each scene" half of the idea, and it means a clip with NO cuts at all (a
- * screen recording that only ever changes gradually) still gets even coverage
- * rather than none.
+ * The COUNT is the load-bearing part. An earlier version made every scene cut a
+ * boundary, which on a real 6.5-minute talk produced 73 buckets for a 45-frame
+ * budget — and since selection visits buckets in time order, it reached its
+ * budget while still inside the early ones and returned nothing whatsoever from
+ * the last 2.8 minutes. More buckets than frames is not finer granularity; it
+ * is a guarantee that the tail is never reached.
+ *
+ * So even slices come first and the cuts only move them: each boundary snaps to
+ * the nearest cut within half a slice, and otherwise stays where even spacing
+ * put it. A clip with no cuts gets even coverage, a clip with cuts gets frames
+ * that begin where its scenes do, and neither can starve its own ending.
  */
 export function buildSceneBuckets(
   cuts: number[],
@@ -348,20 +354,32 @@ export function buildSceneBuckets(
   const total = end - start;
   if (!(total > 0) || target <= 1) return [];
 
-  const inner = [...new Set(cuts.filter((c) => c > start && c < end))].sort((a, b) => a - b);
-  const bounds = [start, ...inner, end];
+  const slice = total / target;
+  const inner = cuts.filter((cut) => cut > start && cut < end).sort((a, b) => a - b);
 
   const edges: number[] = [];
-  for (let i = 0; i < bounds.length - 1; i++) {
-    const from = bounds[i];
-    const to = bounds[i + 1];
-    const share = (to - from) / total;
-    const parts = Math.max(1, Math.round(target * share));
-    for (let p = 1; p < parts; p++) edges.push(from + ((to - from) * p) / parts);
-    if (i < bounds.length - 2) edges.push(to);
+  for (let i = 1; i < target; i++) {
+    const ideal = start + slice * i;
+
+    // Nearest cut within half a slice, so a boundary never travels far enough
+    // to cross its neighbour or to unbalance the buckets either side of it.
+    let snapped: number | undefined;
+    let closest = slice / 2;
+    for (const cut of inner) {
+      const distance = Math.abs(cut - ideal);
+      if (distance < closest) {
+        closest = distance;
+        snapped = cut;
+      }
+    }
+
+    const edge = snapped ?? ideal;
+    // Two ideals can snap to the same cut; keeping the edges strictly ascending
+    // avoids creating an empty bucket between them.
+    if (edges.length === 0 || edge > edges[edges.length - 1]) edges.push(edge);
   }
 
-  return edges.sort((a, b) => a - b);
+  return edges;
 }
 
 /**

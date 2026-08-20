@@ -35,6 +35,7 @@ import { AnalysisCache, cacheKey } from '../utils/cache.js';
 import { filterAnalysisResult } from '../utils/field-filter.js';
 import type { AnalysisField } from '../utils/field-filter.js';
 import { cleanupTempDir, createTempDir } from '../utils/temp-files.js';
+import { readCachedTranscript, writeCachedTranscript } from '../utils/transcript-cache.js';
 import { toLocalPath } from '../utils/url-detector.js';
 import { warningReason } from '../utils/warnings.js';
 import { maxWidthParam } from './frame-options.js';
@@ -543,16 +544,31 @@ async function runAnalysisPipeline(
     // Whisper fallback: no transcript + a video file + a (probable) audio track.
     if (result.transcript.length === 0 && videoPath && metadata.hasAudio !== false) {
       try {
-        const audioPath = await extractAudioTrack(videoPath, tempDir ?? '');
-        const whisperTranscript = await transcribeAudio(audioPath, params.transcribe, (w) =>
-          warnings.push(w),
-        );
+        // A transcript this machine has already produced for this exact file.
+        // Transcription is the only step here that costs minutes rather than
+        // seconds, which is long enough to outlast an MCP client's timeout —
+        // and when the client gives up, the server finishes anyway. Without
+        // this the next attempt repeats the whole cost and times out again.
+        const cached = await readCachedTranscript(url, params.transcribe);
+        if (cached) {
+          result.transcript = cached;
+          transcriptFromWhisper = true;
+          warnings.push(
+            'Transcript reused from a previous Whisper run on this file (cached locally).',
+          );
+        }
+
+        const audioPath = cached ? null : await extractAudioTrack(videoPath, tempDir ?? '');
+        const whisperTranscript = audioPath
+          ? await transcribeAudio(audioPath, params.transcribe, (w) => warnings.push(w))
+          : [];
         if (whisperTranscript.length > 0) {
           result.transcript = whisperTranscript;
           transcriptFromWhisper = true;
           warnings.push(
             'Transcript generated via Whisper fallback (no native transcript available).',
           );
+          await writeCachedTranscript(url, params.transcribe, whisperTranscript);
         }
       } catch (e: unknown) {
         // No "Whisper fallback failed" prefix: the commonest reason here is

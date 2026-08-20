@@ -283,6 +283,29 @@ describe('buildSceneBuckets', () => {
     expect(edges.filter((e) => e < 80).length).toBeGreaterThan(edges.filter((e) => e > 80).length);
   });
 
+  /**
+   * The bug this cap exists for: 90 scene cuts on a 6.5-minute talk produced 73
+   * buckets for a 45-frame budget, selection visits buckets in time order, and
+   * the last 2.8 minutes of the video came back with no frames at all. Never
+   * more buckets than frames.
+   */
+  it('never produces more buckets than frames requested, however many cuts', () => {
+    const manyCuts = Array.from({ length: 90 }, (_, i) => 1 + i * 1.7); // all inside 0-156s
+    const edges = buildSceneBuckets(manyCuts, [0, 391], 45);
+
+    expect(edges.length).toBeLessThanOrEqual(44); // 45 buckets = 44 edges
+    // ...and the buckets must still reach the end of the clip, which is the
+    // half that actually broke: cut-derived boundaries all sat in the first 40%.
+    expect(Math.max(...edges)).toBeGreaterThan(300);
+  });
+
+  it('spreads boundaries evenly when the cuts are all bunched at the start', () => {
+    const edges = buildSceneBuckets([1, 2, 3, 4, 5], [0, 400], 4);
+    // Four buckets over 400s: boundaries near 100/200/300, not near the cuts.
+    expect(edges).toHaveLength(3);
+    expect(edges[2]).toBeGreaterThan(250);
+  });
+
   it('returns no buckets when there is nothing to divide', () => {
     expect(buildSceneBuckets([], [0, 0], 5)).toEqual([]);
     expect(buildSceneBuckets([], [0, 100], 1)).toEqual([]);

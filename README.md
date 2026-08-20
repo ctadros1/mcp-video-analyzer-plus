@@ -639,7 +639,22 @@ Measured on a 5-minute clip with ordinary visual variation, at the default budge
 
 The one case that returns noticeably fewer is a video whose frames genuinely are near-identical — a static slide held for minutes, or a synthetic test pattern. On such a clip a 45-frame budget may return 17, because the other 28 carried nothing new. If you want them anyway, raise `frameCandidateMultiplier` (more candidates to choose from) — but the usual reason for a low count is that the extra frames would have been redundant.
 
-**If an export is still too slow**, in rough order of impact: `frameOcrWeight: 0` (skips OCR ranking), `frameSelection: "sceneChange"` (the legacy path), `detail: "brief"` (metadata + transcript, no frames at all), or a smaller `maxFrames`. Whisper transcription of a long video is usually the larger cost — `skipFrames` is not the lever there, `detail: "brief"` is.
+**If an export is still too slow, the cause is almost certainly transcription, not frames.** Measured on a 6.5-minute 1080p talk: probing, scene detection, uniform sampling, scoring and selection of 45 frames take **9 seconds** in total. Whisper on the same file takes *minutes* on CPU — long enough to exceed an MCP client's tool timeout, which is what makes a call fail with no result at all.
+
+Two things follow, and they are easy to misread:
+
+- **A timed-out call is not lost work.** The client stops waiting; the server does not stop working. Transcription runs to completion and the result is cached (below), so **asking again is the fix** — the second call reuses the transcript and finishes in seconds.
+- **`detail: "brief"` appearing to "work" is not evidence that frames are broken.** Brief skips frame extraction *and* is fast enough to return, so a run that succeeds without frames looks like a frame failure when it is a transcription timeout.
+
+Levers, in order of impact: ask again (warm cache), `detail: "brief"` if you only want the transcript, `frameOcrWeight: 0`, `frameSelection: "sceneChange"`, a smaller `maxFrames`. Or run the [CLI](#cli-one-shot-no-mcp-client), which has no client timeout at all — `--zip <dir>` produces the same bundle and simply takes as long as it takes.
+
+### Transcript caching
+
+Whisper transcripts of **local files** are cached in the per-user cache directory (`mcp-video-analyzer/transcripts/`), automatically and by default. A repeat analysis of the same file reuses the transcript instead of re-transcribing, and says so in `warnings`.
+
+The entry is keyed on the file's `mtime:size` as well as its path, so editing or replacing the video invalidates it rather than serving the transcript of whatever used to have that name. The transcription options are in the key too — a different model or forced language is a different transcript — as are the `WHISPER_*` environment settings, so changing the backend invalidates rather than serving a stale result.
+
+This is deliberately **not** the [`MCP_WRITE_SIDECARS`](#persistent-sidecars-resumable-bulk-processing) mechanism, which stays opt-in because it writes `<stem>.vtt` next to your video. This cache touches nothing in your folders, which is why it can be on by default. Remote sources are not cached: there is no local stamp to invalidate against, and their transcripts usually come from native captions, which are cheap to refetch.
 
 `get_frames` reports which selector ran in its `mode` field: `"smart"`, `"scene"`, or `"dense"` (an explicit `dense: true` still wins — asking for uniform coverage gets uniform coverage).
 
