@@ -13,7 +13,11 @@ import { VERSION } from './version.js';
 
 export function createServer(): FastMCP {
   const server = new FastMCP({
-    name: 'mcp-video-analyzer',
+    // The fork's own name, so a client that lists both is not showing two
+    // identically-named servers. The per-user cache directory deliberately
+    // stays 'mcp-video-analyzer' (temp-files.ts) — renaming it would orphan
+    // every already-downloaded tessdata file and cached frame for no gain.
+    name: 'mcp-video-analyzer-plus',
     version: VERSION,
     instructions: `Video analysis MCP server. Extracts transcripts, key frames, metadata, comments, OCR text, and annotated timelines from video URLs and local video files.
 

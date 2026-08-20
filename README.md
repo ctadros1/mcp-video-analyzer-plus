@@ -10,122 +10,257 @@
   <a href="https://github.com/ctadros1/mcp-video-analyzer-plus/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-8b5cf6?labelColor=1e1e2e" alt="license" /></a>
 </p>
 
-> ### Fork of [guimatheus92/mcp-video-analyzer](https://github.com/guimatheus92/mcp-video-analyzer) — added: smart frame selection, URL/file fallback
+> ### Fork of [guimatheus92/mcp-video-analyzer](https://github.com/guimatheus92/mcp-video-analyzer) — added: smart frame selection, URL/file fallback, zip export
 >
-> Everything upstream does, plus two changes:
+> Everything upstream does, plus three additions:
 >
 > 1. **[Smart frame selection](#smart-frame-selection)** — frames are over-sampled, scored (sharpness, on-screen-text density) and selected for diversity, instead of keeping whatever ffmpeg's scene detector fired on. On by default; `frameSelection: "sceneChange"` restores the upstream path.
 > 2. **[URL + local-file fallback](#url--local-file-fallback)** — every video tool accepts an optional `localFallbackPath` and uses it automatically when the remote source is blocked or unreachable (YouTube anti-bot, missing yt-dlp, network failure).
 > 3. **[`export_video_bundle`](#exporting-a-zip-bundle)** — a ninth tool that packages the analysis as a `.zip` on disk: key frames in a `frames/` folder, the transcript as `transcript.md`.
 >
-> Both are additive: existing calls behave as before. Upstream's adapter and extraction code is deliberately left close to original so `git pull upstream main` keeps working — that surface is an active arms race against YouTube and is best tracked, not rewritten.
+> All three are additive: existing calls behave exactly as before. Upstream's adapter and extraction code is deliberately left close to original so `git pull upstream main` keeps working — that surface is an active arms race against YouTube and is best tracked, not rewritten.
 >
-> **Not published to npm.** Build it locally (`npm install && npm run build`) and point your MCP client at `dist/index.js` — see [Claude Desktop](#claude-desktop). Original work and continuing credit: [Guilherme Matheus](https://github.com/guimatheus92). MIT licensed, as upstream.
+> **Not published to npm** — install it straight from GitHub, or clone and build. Both take about a minute: see **[Setup](#setup)**. Original work and continuing credit: [Guilherme Matheus](https://github.com/guimatheus92). MIT licensed, as upstream.
 
 No existing video MCP combines **transcripts + visual frames + metadata** in one tool. This one does — across Loom, the major yt-dlp platforms (YouTube/Vimeo/TikTok/Instagram/X/Twitch/Dailymotion/Facebook), direct video URLs, and local files.
 
 > **Want a full pipeline, not just a tool?** [social-knowledge-base](https://github.com/guimatheus92/social-knowledge-base) is built on top of this server — it downloads whole Instagram creator accounts (reels, stories, highlights), transcribes them, and turns the result into a searchable, RAG-queryable knowledge base with AI-generated notes. Use this MCP when you want per-video analysis inside an agent; use social-knowledge-base when you want to archive and query an entire account.
 
-## Installation
+## Quick start
 
-### Prerequisites
-
-- **Node.js 22.12+** — required to run the server via `npx`
-- **yt-dlp** — **required** for YouTube/Vimeo/TikTok/Instagram/X/Twitch/Dailymotion/Facebook URLs; optional for everything else (improves Loom download quality). Install with `pip install yt-dlp`
-- **Chrome/Chromium** (optional) — fallback for frame extraction if yt-dlp is unavailable
-
-> Without yt-dlp or Chrome, direct URLs and local files still get frames — the bundled `ffmpeg-static` does the extraction, and Loom falls back to its own CDN download. Platform URLs (YouTube etc.) degrade to a clear "install yt-dlp" warning. Transcripts, metadata, and comments never require either.
-
-This fork is **not published to npm**, so every route below runs a local build. Clone and build once:
-
-```bash
-git clone https://github.com/ctadros1/mcp-video-analyzer-plus.git
-cd mcp-video-analyzer-plus
-npm install && npm run build
-```
-
-`npm install` runs `prepare`, which already builds — the explicit `npm run build` is just belt and braces. The result is `dist/index.js`; every config below points at its **absolute** path.
-
-### Claude Code (MCP)
-
-```bash
-claude mcp add video-analyzer -- node /absolute/path/to/mcp-video-analyzer-plus/dist/index.js
-```
-
-Then restart Claude Code or start a new conversation.
-
-### Claude Code — `/video` plugin
-
-```
-/plugin marketplace add ctadros1/mcp-video-analyzer-plus
-/plugin install video@mcp-video-analyzer-plus
-```
-
-This adds the `/video` slash command **and** auto-registers the MCP server (the bundled `.mcp.json` launches `dist/index.js` from the plugin directory, so the clone must be built):
-
-```
-/video https://youtu.be/jNQXAC9IVRw what happens at 0:10?
-/video ~/Movies/screen-recording.mp4 when does the UI break?
-```
-
-### Other agents — Codex, Cursor, Copilot, Gemini CLI, …
-
-`npx skills add` installs from a published package, which this fork is not. Register the MCP server directly (below), or invoke the built CLI from any shell — the [CLI](#cli-one-shot-no-mcp-client) needs no MCP client at all.
-
-### VS Code / Cursor
-
-Add to your MCP settings file:
-
-- **VS Code**: `File → Preferences → Settings → search "MCP"` or edit `~/.vscode/mcp.json` / `%APPDATA%\Code\User\mcp.json` (Windows)
-- **Cursor**: `Settings → MCP Servers → Add`
+Add this to your MCP client's config, restart it, and paste a video link. That's the whole install — npm fetches and builds the server for you.
 
 ```json
 {
-  "servers": {
-    "mcp-video-analyzer-plus": {
-      "type": "stdio",
-      "command": "node",
-      "args": ["/absolute/path/to/mcp-video-analyzer-plus/dist/index.js"]
+  "mcpServers": {
+    "video-analyzer": {
+      "command": "npx",
+      "args": ["-y", "github:ctadros1/mcp-video-analyzer-plus"]
     }
   }
 }
 ```
 
-Then reload the window (`Ctrl+Shift+P` → "Developer: Reload Window").
+<sup>Claude Desktop config lives at `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows). Needs Node 22.12+. Full walkthrough, other clients and troubleshooting: **[Setup](#setup)**.</sup>
 
-### Claude Desktop
+## Setup
 
-Add to your Claude Desktop config file:
+Two ways in. Pick one — you don't need both.
 
-- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+| | **A — one line, no clone** | **B — local clone** |
+|---|---|---|
+| Steps | Paste one config block | Clone, build, then paste |
+| First launch | Slow (npm builds it: 1–2 min) | Instant |
+| Updating | Automatic on cache miss | `git pull && npm run build` |
+| Editing the code | No | Yes |
+| Best for | Just using it | Hacking on it, or if A times out |
+
+**Start with A.** Fall back to B if your client times out waiting for the server to boot, or if you want to change the code.
+
+### Step 1 — Prerequisites
+
+```bash
+node --version    # need v22.12 or newer
+yt-dlp --version  # optional, but required for YouTube/TikTok/Instagram/X/…
+```
+
+- **Node.js 22.12+** — required. [Download](https://nodejs.org/) or `brew install node`.
+- **yt-dlp** — install with `pip install yt-dlp` (or `brew install yt-dlp`). Needed only for platform URLs. Loom, direct `.mp4`/`.webm`/`.mov` links and local files work without it.
+- **ffmpeg** — **not** needed. A binary ships with the package.
+- **Chrome/Chromium** — optional last-resort frame extraction if yt-dlp is missing.
+
+> Missing yt-dlp is never a crash: platform URLs come back with a clear "install yt-dlp" note in `warnings`, and everything else keeps working.
+
+---
+
+### Route A — one line, no clone
+
+npm fetches the repo and builds it for you. Nothing to clone, no path to maintain.
+
+**Claude Desktop** — edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+
+```json
+{
+  "mcpServers": {
+    "video-analyzer": {
+      "command": "npx",
+      "args": ["-y", "github:ctadros1/mcp-video-analyzer-plus"]
+    }
+  }
+}
+```
+
+**Claude Code:**
+
+```bash
+claude mcp add video-analyzer -- npx -y github:ctadros1/mcp-video-analyzer-plus
+```
+
+Then go to [Step 3](#step-3--restart-and-verify).
+
+> **The first launch compiles the project**, which can take a minute or two on a cold npm cache — long enough that a client may give up waiting for the server to answer. If the server shows as failed on first start, either try again (the build is now cached) or use Route B, which has no such window.
+
+---
+
+### Route B — local clone
+
+**Step 2a — clone and build**
+
+```bash
+git clone https://github.com/ctadros1/mcp-video-analyzer-plus.git
+cd mcp-video-analyzer-plus
+npm install
+```
+
+`npm install` builds the project automatically via the `prepare` script. To be sure, run `npm run build` — it is safe to run twice.
+
+**Step 2b — get the absolute path**
+
+Every config below needs the **absolute** path to `dist/index.js`, because your MCP client does not run from a predictable directory. Print it:
+
+```bash
+echo "$PWD/dist/index.js"
+```
+
+Copy that line. It looks like `/Users/you/code/mcp-video-analyzer-plus/dist/index.js`. Substitute it wherever the blocks below say `/ABSOLUTE/PATH/TO`.
+
+**Step 2c — register the server**
+
+<details open>
+<summary><b>Claude Desktop</b></summary>
+
+<br>
+
+Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows). Create the file if it isn't there:
 
 ```json
 {
   "mcpServers": {
     "video-analyzer": {
       "command": "node",
-      "args": ["/absolute/path/to/mcp-video-analyzer-plus/dist/index.js"]
+      "args": ["/ABSOLUTE/PATH/TO/mcp-video-analyzer-plus/dist/index.js"]
     }
   }
 }
 ```
 
-Replace the path with your clone. It must be **absolute** — Claude Desktop does not run the server from a predictable working directory — and it must point at the built `dist/index.js`, not `src/`. Rebuild (`npm run build`) after pulling changes; the server is loaded once at startup, so restart Claude Desktop afterwards.
+If you already have other servers, add `video-analyzer` alongside them — don't replace the whole `mcpServers` object.
 
-If you also have the upstream package configured under the same server name, remove it or rename one of the two — otherwise which server answers is a coin toss.
+</details>
 
-Then restart Claude Desktop.
+<details>
+<summary><b>Claude Code</b></summary>
+
+<br>
+
+```bash
+claude mcp add video-analyzer -- node /ABSOLUTE/PATH/TO/mcp-video-analyzer-plus/dist/index.js
+```
+
+</details>
+
+<details>
+<summary><b>VS Code / Cursor</b></summary>
+
+<br>
+
+VS Code: `~/.vscode/mcp.json` (or `%APPDATA%\Code\User\mcp.json`). Cursor: **Settings → MCP Servers → Add**.
+
+```json
+{
+  "servers": {
+    "video-analyzer": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/ABSOLUTE/PATH/TO/mcp-video-analyzer-plus/dist/index.js"]
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><b>Claude Code plugin (adds the <code>/video</code> slash command)</b></summary>
+
+<br>
+
+```
+/plugin marketplace add ctadros1/mcp-video-analyzer-plus
+/plugin install video@mcp-video-analyzer-plus
+```
+
+Registers the MCP server *and* a `/video` command. Requires the clone to be built, since the bundled config launches `dist/index.js` from the plugin directory.
+
+```
+/video https://youtu.be/jNQXAC9IVRw what happens at 0:10?
+```
+
+</details>
+
+---
+
+### Step 3 — restart and verify
+
+**Fully quit your client and reopen it.** On macOS that means **Cmd+Q**, not closing the window — MCP servers are only loaded at startup.
+
+Then ask it:
+
+```
+Analyze this video: https://www.youtube.com/watch?v=jNQXAC9IVRw
+```
+
+It should call `analyze_video` on its own, with no prompting.
+
+**Confirm you're on the fork, not upstream:** ask for the tool list and look for **`export_video_bundle`**. Upstream has eight tools and no such name; this fork has nine.
+
+---
+
+### Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Server doesn't appear at all | Client wasn't fully restarted | Cmd+Q and reopen — closing the window is not enough |
+| "server failed to start" on Route A | First-run build exceeded the client's startup timeout | Retry (the build is cached now), or switch to Route B |
+| "Cannot find module …/dist/index.js" | Never built, or path is wrong | `npm run build` in the clone, then re-check the path from Step 2b |
+| Config changes do nothing | Malformed JSON — the client silently ignores the file | `node -e "require('/path/to/claude_desktop_config.json')"` — it prints the syntax error |
+| Old behaviour after `git pull` | `dist/` is gitignored and not rebuilt automatically | `npm run build`, then restart the client |
+| `export_video_bundle` missing | Still running upstream | Check the config actually points at this fork |
+| YouTube link fails, others work | yt-dlp missing, or the video is blocked | `pip install yt-dlp`; for blocked videos pass `localFallbackPath` — see [URL + local-file fallback](#url--local-file-fallback) |
+| Instagram / age-restricted fails | Needs a logged-in session | Set `YTDLP_COOKIES_FROM_BROWSER=chrome` or `YTDLP_COOKIES=<netscape-cookie-file>` |
+
+### Keeping it up to date
+
+Route A updates itself. For Route B:
+
+```bash
+cd mcp-video-analyzer-plus
+git pull
+npm install && npm run build
+```
+
+Then restart your client. **The rebuild is not optional** — `dist/` is gitignored, so without it you keep running the old compiled code.
+
+To pull in fixes from the original project (worth doing when YouTube changes and upstream ships a yt-dlp fix):
+
+```bash
+git pull upstream main
+npm install && npm run build
+```
 
 ### CLI (one-shot, no MCP client)
 
-The same engine is exposed as a one-shot command — this is what the `video` skill uses on agents without MCP, and it works standalone in any terminal:
+The same engine runs as a plain command — useful for scripts, or for any agent that has a shell but no MCP:
 
 ```bash
-node /absolute/path/to/mcp-video-analyzer-plus/dist/index.js analyze "https://youtu.be/jNQXAC9IVRw"
+# Route A — no clone
+npx -y github:ctadros1/mcp-video-analyzer-plus analyze "https://youtu.be/jNQXAC9IVRw"
+
+# Route B — local clone
+node /ABSOLUTE/PATH/TO/mcp-video-analyzer-plus/dist/index.js analyze "https://youtu.be/jNQXAC9IVRw"
 ```
 
-stdout is a single JSON document — `metadata`, `transcript`, `ocrResults`, `timeline`, `warnings`, `frameCount`, and `frames` as `{ time, filePath, mimeType }` entries pointing at JPEG key frames copied to `--out` (default: the per-user cache dir — `%LOCALAPPDATA%` on Windows, `~/Library/Caches` on macOS, `$XDG_CACHE_HOME` or `~/.cache` on Linux — under `mcp-video-analyzer/<source-hash>/`; set `MCP_CACHE_DIR` to an absolute path to relocate it). Unlike the temp dir this used to live in, nothing reaps that location, so frames persist until you delete them — the directories are created `0700`. Progress streams on stderr, so `stdout` can be piped straight into a JSON parser. Partial failures land in `warnings` with exit code 0; only hard failures exit 1.
+stdout is a single JSON document — `metadata`, `transcript`, `ocrResults`, `timeline`, `warnings`, `frameCount`, and `frames` as `{ time, filePath, mimeType }` entries pointing at JPEG key frames copied to `--out` (default: the per-user cache dir — `%LOCALAPPDATA%` on Windows, `~/Library/Caches` on macOS, `$XDG_CACHE_HOME` or `~/.cache` on Linux — under `mcp-video-analyzer/<source-hash>/`; set `MCP_CACHE_DIR` to an absolute path to relocate it). Nothing reaps that location, so frames persist until you delete them; the directories are created `0700`. Progress streams on stderr, so stdout pipes straight into a JSON parser. Partial failures land in `warnings` with exit code 0; only hard failures exit 1.
 
 | Flag | Description |
 |------|-------------|
@@ -143,17 +278,7 @@ stdout is a single JSON document — `metadata`, `transcript`, `ocrResults`, `ti
 | `--model <name>` / `--language <code>` | Whisper overrides for the transcription fallback |
 | `--out <dir>` | Where frame images are copied |
 
-Run with no arguments (`node dist/index.js`) to start the MCP stdio server — the CLI is purely additive.
-
-### Verify it works
-
-Once installed, ask your AI assistant:
-
-```
-Analyze this video: https://www.youtube.com/watch?v=jNQXAC9IVRw
-```
-
-(also works with an Instagram/TikTok/Loom link, a direct `.mp4` URL, or a local file path). If the server is connected, it will automatically call the `analyze_video` tool.
+Run it with no arguments to start the MCP stdio server instead — the CLI is purely additive.
 
 ## Tools
 
