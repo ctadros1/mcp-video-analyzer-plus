@@ -210,6 +210,13 @@ async function entryMtime(entry: ZipEntry): Promise<Date> {
  * silently throws the title away. Replacing both separators is also what makes
  * the result traversal-safe — with no `/` or `\\` left, a `..` cannot escape
  * the directory it is joined to.
+ *
+ * Length is capped at a word boundary. A blunt slice cut a real title to
+ * `...Kole-Jain-(10`, which reads as a corrupted name rather than a shortened
+ * one — the fragment `(10` is the start of `(1080p)` and means nothing on its
+ * own. Cutting back to the last separator loses a word and keeps the rest
+ * legible. A single token longer than the cap has no boundary to fall back to,
+ * so it is truncated as-is rather than reduced to nothing.
  */
 export function safeFileName(raw: string, fallback = 'video'): string {
   // Control characters are matched by codepoint rather than by an escape range
@@ -218,10 +225,29 @@ export function safeFileName(raw: string, fallback = 'video'): string {
   const printable = [...raw]
     .map((character) => ((character.codePointAt(0) ?? 0) < 0x20 ? '-' : character))
     .join('');
-  const cleaned = printable
-    .replace(/[<>:"/\\|?*\s]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^[.-]+|[.-]+$/g, '')
-    .slice(0, 60);
-  return cleaned.length > 0 ? cleaned : fallback;
+
+  const cleaned = trimEdges(printable.replace(/[<>:"/\\|?*\s]+/g, '-').replace(/-+/g, '-'));
+  if (cleaned.length <= MAX_FILE_NAME) return cleaned || fallback;
+
+  const clipped = cleaned.slice(0, MAX_FILE_NAME);
+  // Only step back when the cut landed INSIDE a word; a cut that happened to
+  // fall on a separator is already at a boundary. `lastIndexOf` returning -1
+  // is checked rather than passed to `slice`, where it would quietly mean
+  // "drop the final character" instead of "there is no boundary".
+  const lastSeparator = clipped.lastIndexOf('-');
+  const boundary =
+    cleaned[MAX_FILE_NAME] === '-'
+      ? clipped
+      : lastSeparator > 0
+        ? clipped.slice(0, lastSeparator)
+        : '';
+
+  return trimEdges(boundary) || trimEdges(clipped) || fallback;
+}
+
+const MAX_FILE_NAME = 60;
+
+/** Leading/trailing dots, dashes and opening brackets left by sanitizing. */
+function trimEdges(value: string): string {
+  return value.replace(/^[.\-([{]+/, '').replace(/[.\-([{]+$/, '');
 }

@@ -104,8 +104,8 @@ describe('export_video_bundle', () => {
         options: { maxFrames: 2 },
       });
 
-      expect(doc.zipPath).toBe(join(target, 'demo.mp4.zip'));
-      expect(await readdir(target)).toEqual(['demo.mp4.zip']);
+      expect(doc.zipPath).toBe(join(target, 'demo.zip'));
+      expect(await readdir(target)).toEqual(['demo.zip']);
     } finally {
       await cleanupTempDir(dir);
     }

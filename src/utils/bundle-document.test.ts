@@ -116,6 +116,18 @@ describe('bundleFileName', () => {
     expect(bundleFileName(analysis())).toBe('Deploy-walkthrough');
   });
 
+  it('drops a video extension so the archive is not talk.mp4.zip', () => {
+    const result = analysis();
+    result.metadata.title = 'team-standup.mp4';
+    expect(bundleFileName(result)).toBe('team-standup');
+  });
+
+  it('keeps an extension-like ending that is not a video container', () => {
+    const result = analysis();
+    result.metadata.title = 'Release notes v1.2';
+    expect(bundleFileName(result)).toBe('Release-notes-v1.2');
+  });
+
   it('falls back to the platform when the title is unusable', () => {
     const result = analysis();
     result.metadata.title = '///';

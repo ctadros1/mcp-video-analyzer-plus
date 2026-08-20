@@ -1,5 +1,6 @@
 import { extname } from 'node:path';
 import type { IAnalysisResult, IFrameResult } from '../types.js';
+import { VIDEO_EXTENSIONS } from './url-detector.js';
 import { safeFileName } from './zip.js';
 
 /** The archive's frames folder — see `writeVideoBundle` for the full layout. */
@@ -94,5 +95,12 @@ export function buildTranscriptMarkdown(result: IAnalysisResult): string {
  * back to its platform when the title is missing or sanitizes to nothing.
  */
 export function bundleFileName(result: IAnalysisResult): string {
-  return safeFileName(result.metadata.title, `${result.metadata.platform}-video`);
+  // A local file's title is its basename, extension and all, so the archive
+  // would otherwise be `talk.mp4.zip`. Only a recognized video extension is
+  // stripped, and only at the end — a title that merely mentions ".mp4" keeps it.
+  const title = result.metadata.title ?? '';
+  const extension = extname(title).toLowerCase();
+  const stem = VIDEO_EXTENSIONS.has(extension) ? title.slice(0, -extension.length) : title;
+
+  return safeFileName(stem, `${result.metadata.platform}-video`);
 }

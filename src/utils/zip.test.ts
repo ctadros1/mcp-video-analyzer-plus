@@ -66,6 +66,34 @@ describe('safeFileName', () => {
   it('bounds the length', () => {
     expect(safeFileName('a'.repeat(500)).length).toBeLessThanOrEqual(60);
   });
+
+  /**
+   * The real title that produced `...Kole-Jain-(10.zip` — a blunt slice landed
+   * mid-token and left the opening fragment of "(1080p)", which reads as a
+   * corrupted name rather than a shortened one.
+   */
+  it('truncates at a word boundary, not mid-word', () => {
+    const name = safeFileName('5 SaaS UIUX mistakes that SCREAM you Vibe Code - Kole Jain (1080p)');
+
+    expect(name).toBe('5-SaaS-UIUX-mistakes-that-SCREAM-you-Vibe-Code-Kole-Jain');
+    expect(name.endsWith('-')).toBe(false);
+    expect(name).not.toContain('(');
+  });
+
+  it('does not strand an opening bracket at either end', () => {
+    expect(safeFileName('(draft) something')).toBe('draft)-something');
+    expect(safeFileName('something (')).toBe('something');
+  });
+
+  it('truncates a single long word rather than returning nothing', () => {
+    // No separator to fall back to — a boundary cut would empty the string.
+    const name = safeFileName('x'.repeat(200));
+    expect(name).toHaveLength(60);
+  });
+
+  it('keeps a name that already fits untouched', () => {
+    expect(safeFileName('Quarterly review 2026')).toBe('Quarterly-review-2026');
+  });
 });
 
 describe('writeZipArchive', () => {
