@@ -13,6 +13,8 @@ const run = promisify(execFile);
 
 interface BundleDoc {
   zipPath: string;
+  folder: string;
+  revealCommand: string;
   bytes: number;
   frameCount: number;
   transcriptEntries: number;
@@ -56,6 +58,12 @@ describe('export_video_bundle', () => {
 
       expect(doc.zipPath).toBe(join(dir, 'bundle.zip'));
       expect(doc.bytes).toBeGreaterThan(0);
+
+      // The archive cannot travel through the response, so the path has to be
+      // actionable on its own — the default location is a cache directory.
+      expect(doc.folder).toBe(dir);
+      expect(doc.revealCommand).toContain(doc.zipPath);
+      expect(doc.revealCommand).toMatch(/^(open -R|explorer \/select,|xdg-open)/);
       expect(doc.frameCount).toBeGreaterThan(0);
 
       const { stdout } = await run('unzip', ['-t', doc.zipPath]);

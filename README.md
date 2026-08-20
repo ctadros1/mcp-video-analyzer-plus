@@ -708,6 +708,8 @@ Ask for it in the words you'd naturally use — *"export this video"*, *"save th
 ```json
 {
   "zipPath": "/Users/you/Desktop/demo.zip",
+  "folder": "/Users/you/Desktop",
+  "revealCommand": "open -R \"/Users/you/Desktop/demo.zip\"",
   "bytes": 65730,
   "frameCount": 5,
   "transcriptEntries": 0,
@@ -716,7 +718,11 @@ Ask for it in the words you'd naturally use — *"export this video"*, *"save th
 }
 ```
 
-**The file lands on disk, not in the chat.** An MCP server talks to its client over stdio and cannot hand it a binary payload, so "returns a zip" means "writes a zip and tells you where". Base64-ing a multi-megabyte archive into the response was the alternative — it would cost more context than the analysis it packages and still leave you without a file.
+**The file lands on disk, not in the chat.** An MCP server talks to its client over stdio and cannot hand it a binary payload. The protocol *can* carry a base64 blob — but a client will not turn an opaque `application/zip` into a save-able download, and encoding a multi-megabyte archive would cost more context than the analysis it packages while still leaving you without a file. So "returns a zip" means "writes a zip and tells you exactly where".
+
+Which is why the response carries **`revealCommand`** as well as the path — a runnable command (`open -R` on macOS, `explorer /select,` on Windows, `xdg-open` on Linux) that opens your file manager with the archive already selected. The default location is a cache directory, and a cache path nobody can navigate to by hand is only nominally a deliverable.
+
+**And the destination is a choice, not a constraint.** `outputPath` takes any absolute file or directory — `~/Desktop`, next to the source video, wherever. An agent saying it "can't move the file" or "lacks filesystem access" has simply not passed it; the tool writes wherever it is told.
 
 Details worth knowing:
 

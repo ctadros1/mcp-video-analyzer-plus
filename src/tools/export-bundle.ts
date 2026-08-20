@@ -1,4 +1,4 @@
-import { isAbsolute } from 'node:path';
+import { dirname, isAbsolute } from 'node:path';
 import type { FastMCP } from 'fastmcp';
 import { UserError } from 'fastmcp';
 import { z } from 'zod';
@@ -10,7 +10,7 @@ import {
   runWithLocalFallback,
   videoUrlParam,
 } from '../utils/source-fallback.js';
-import { writeVideoBundle } from '../utils/video-bundle.js';
+import { revealCommand, writeVideoBundle } from '../utils/video-bundle.js';
 import { warningReason } from '../utils/warnings.js';
 import { AnalyzeOptionsSchema, getAnalysis, resolveAnalyzeParams } from './analyze-core.js';
 
@@ -53,7 +53,11 @@ Archive layout:
 - frames/001_0-04.jpg, 002_0-11.jpg, … — the extracted key frames, named ordinal-first so the folder lists in chronological order, with the timestamp in each name
 - transcript.md — the transcript with timestamps, plus a header identifying the video and any on-screen (OCR) text
 
-Returns the absolute path to the .zip, its size, and a manifest of its contents. The file is written to disk; MCP cannot deliver a binary payload in the response, so give the user the path.
+Returns zipPath (absolute), folder, revealCommand, size and a manifest.
+
+DELIVERING THE RESULT — the file is on disk and MCP cannot put a binary in a chat response, so:
+- Always show the user zipPath, and give them revealCommand as a runnable command. It opens their file manager with the archive already selected, which matters because the default location is a cache directory nobody navigates to by hand.
+- Do NOT tell the user you "can't move the file" or that you "lack filesystem access". You choose where it goes: pass outputPath. If they want it somewhere convenient, pass an absolute path such as their Desktop (e.g. "/Users/<name>/Desktop") or a directory, and it is written there directly. Ask where they want it if it is not obvious.
 
 Accepts the same options as analyze_video (detail, maxFrames, maxWidth, frameSelection, …) and the same localFallbackPath fallback for blocked remote sources.`,
     parameters: ExportVideoBundleSchema,
@@ -110,6 +114,8 @@ Accepts the same options as analyze_video (detail, maxFrames, maxWidth, frameSel
               text: JSON.stringify(
                 {
                   zipPath: archive.path,
+                  folder: dirname(archive.path),
+                  revealCommand: revealCommand(archive.path),
                   bytes: archive.bytes,
                   frameCount: archive.names.length - 1,
                   transcriptEntries: result.transcript.length,

@@ -31,6 +31,26 @@ export interface VideoBundle {
   missingFrames: number;
 }
 
+/**
+ * A shell command that reveals the archive in the OS file manager.
+ *
+ * An MCP server cannot hand a binary file to its client — the protocol carries
+ * text, images, audio and resources, and a client will not turn an opaque
+ * `application/zip` blob into a download, quite apart from what base64-ing a
+ * multi-megabyte archive would do to the context. So the deliverable is a path,
+ * and a path buried in a per-user cache directory is not somewhere anyone can
+ * be expected to navigate to by hand. This closes that gap: one command the
+ * user can run to open the folder with the file already selected.
+ */
+export function revealCommand(archivePath: string): string {
+  const quoted = JSON.stringify(archivePath);
+  if (process.platform === 'darwin') return `open -R ${quoted}`;
+  if (process.platform === 'win32') return `explorer /select,${quoted}`;
+  // No universal "select the file" on Linux; opening the containing folder is
+  // the portable equivalent and every desktop environment handles it.
+  return `xdg-open ${JSON.stringify(dirname(archivePath))}`;
+}
+
 export async function writeVideoBundle(
   result: IAnalysisResult,
   outputPath?: string,
