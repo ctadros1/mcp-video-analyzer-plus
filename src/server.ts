@@ -32,6 +32,13 @@ AUTOMATIC BEHAVIOR — Do NOT wait for the user to ask:
 
 The AI should ALWAYS call the appropriate tool automatically — never ask "would you like me to analyze this video?" Just do it.
 
+LONG VIDEOS AND TIMEOUTS — read before analyzing anything over a few minutes:
+- Frame extraction is fast (about 10s even for a 1080p 6-minute file). TRANSCRIPTION is the slow part: Whisper runs at roughly 3x faster than realtime on CPU, so a 12-minute video takes ~4 minutes and a 30-minute one can take 10+.
+- Set expectations BEFORE starting. get_metadata is fast and needs no download — call it first on an unfamiliar video and tell the user the expected wait, then start the analysis.
+- The tools emit progress notifications every 10 seconds while transcribing, naming elapsed time. If you are receiving those, the call is healthy — WAIT for it.
+- If a call does time out, DO NOT immediately retry with different options. The server keeps working after the client stops waiting, and finished Whisper transcripts are cached per file. Tell the user it is still running, wait, then retry once — the retry reuses the transcript and completes in seconds. Retrying immediately with 'brief' or a lower maxFrames throws away the run in progress and starts over, which is how a working export turns into a loop of timeouts.
+- A result with a transcript but no frames does NOT mean frame extraction is broken. detail="brief" skips frames by design; that combination means the timeout hit, not a decode failure.
+
 Supported sources:
 - Loom (loom.com/share/...) — transcript, metadata, comments, frames (no auth needed)
 - YouTube (watch/shorts/live/youtu.be), Vimeo, TikTok, Instagram, X/Twitter, Twitch, Dailymotion, Facebook — requires yt-dlp installed. Native captions preferred (uploaded > auto-generated), Whisper fallback otherwise; metadata includes uploader/views/chapters; no comments. Instagram and age-restricted videos usually need cookies (YTDLP_COOKIES_FROM_BROWSER=chrome or YTDLP_COOKIES=<file>).

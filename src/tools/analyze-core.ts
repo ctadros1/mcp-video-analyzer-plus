@@ -4,7 +4,12 @@ import { getAdapter } from '../adapters/adapter.interface.js';
 import { getDetailConfig, resolveMaxFrames } from '../config/detail-levels.js';
 import type { DetailLevel } from '../config/detail-levels.js';
 import { buildAnnotatedTimeline } from '../processors/annotated-timeline.js';
-import { extractAudioTrack, transcribeAudio } from '../processors/audio-transcriber.js';
+import {
+  approximateDuration,
+  estimateTranscriptionSeconds,
+  extractAudioTrack,
+  transcribeAudio,
+} from '../processors/audio-transcriber.js';
 import type { TranscribeOptions } from '../processors/audio-transcriber.js';
 import { extractBrowserFrames, generateTimestamps } from '../processors/browser-frame-extractor.js';
 import {
@@ -34,6 +39,7 @@ import type { ResultDefiningParams } from '../utils/analysis-sidecar.js';
 import { AnalysisCache, cacheKey } from '../utils/cache.js';
 import { filterAnalysisResult } from '../utils/field-filter.js';
 import type { AnalysisField } from '../utils/field-filter.js';
+import { withProgressHeartbeat } from '../utils/progress.js';
 import { cleanupTempDir, createTempDir } from '../utils/temp-files.js';
 import { readCachedTranscript, writeCachedTranscript } from '../utils/transcript-cache.js';
 import { toLocalPath } from '../utils/url-detector.js';
@@ -550,6 +556,12 @@ async function runAnalysisPipeline(
         // and when the client gives up, the server finishes anyway. Without
         // this the next attempt repeats the whole cost and times out again.
         const cached = await readCachedTranscript(url, params.transcribe);
+        if (!cached && metadata.duration > 0) {
+          await progress(
+            96,
+            `No native transcript — transcribing ${formatTimestamp(Math.floor(metadata.duration))} of audio with Whisper (roughly ${approximateDuration(estimateTranscriptionSeconds(metadata.duration))}).`,
+          );
+        }
         if (cached) {
           result.transcript = cached;
           transcriptFromWhisper = true;
@@ -559,8 +571,20 @@ async function runAnalysisPipeline(
         }
 
         const audioPath = cached ? null : await extractAudioTrack(videoPath, tempDir ?? '');
+
+        // Transcription is a single multi-minute await. Without a heartbeat the
+        // client sees no notification for its whole duration and times the call
+        // out — the work was never the problem, the silence was.
+        const estimate = approximateDuration(estimateTranscriptionSeconds(metadata.duration));
+        const spoken = formatTimestamp(Math.floor(metadata.duration));
         const whisperTranscript = audioPath
-          ? await transcribeAudio(audioPath, params.transcribe, (w) => warnings.push(w))
+          ? await withProgressHeartbeat(
+              progress,
+              96,
+              (elapsed) =>
+                `Transcribing ${spoken} of audio with Whisper — roughly ${estimate} on this machine, ${approximateDuration(elapsed)} elapsed. Still running; retrying now would start it over.`,
+              () => transcribeAudio(audioPath, params.transcribe, (w) => warnings.push(w)),
+            )
           : [];
         if (whisperTranscript.length > 0) {
           result.transcript = whisperTranscript;

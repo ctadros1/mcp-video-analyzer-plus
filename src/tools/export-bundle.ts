@@ -59,7 +59,9 @@ DELIVERING THE RESULT — the file is on disk and MCP cannot put a binary in a c
 - Always show the user zipPath, and give them revealCommand as a runnable command. It opens their file manager with the archive already selected, which matters because the default location is a cache directory nobody navigates to by hand.
 - Do NOT tell the user you "can't move the file" or that you "lack filesystem access". You choose where it goes: pass outputPath. If they want it somewhere convenient, pass an absolute path such as their Desktop (e.g. "/Users/<name>/Desktop") or a directory, and it is written there directly. Ask where they want it if it is not obvious.
 
-Accepts the same options as analyze_video (detail, maxFrames, maxWidth, frameSelection, …) and the same localFallbackPath fallback for blocked remote sources.`,
+Accepts the same options as analyze_video (detail, maxFrames, maxWidth, frameSelection, …) and the same localFallbackPath fallback for blocked remote sources.
+
+TIMING — a video with no existing transcript must be transcribed, and that is the slow part (roughly 3x faster than realtime on CPU: ~4 minutes for a 12-minute video). Frame extraction is about 10s. Call get_metadata first on an unfamiliar video and tell the user the expected wait before you start. While it runs the tool reports progress every 10 seconds with elapsed time — if those are arriving, it is healthy, so wait. If the call times out, do NOT retry with lighter options: the server finishes anyway and caches the transcript, so waiting and retrying once completes in seconds, while an immediate retry discards the run and starts over.`,
     parameters: ExportVideoBundleSchema,
     annotations: {
       title: 'Export Video Bundle (.zip)',

@@ -641,9 +641,19 @@ The one case that returns noticeably fewer is a video whose frames genuinely are
 
 **If an export is still too slow, the cause is almost certainly transcription, not frames.** Measured on a 6.5-minute 1080p talk: probing, scene detection, uniform sampling, scoring and selection of 45 frames take **9 seconds** in total. Whisper on the same file takes *minutes* on CPU — long enough to exceed an MCP client's tool timeout, which is what makes a call fail with no result at all.
 
-Two things follow, and they are easy to misread:
+**The tool reports progress every 10 seconds while transcribing**, naming the audio length, a rough estimate and the elapsed time:
+
+```
+Transcribing 5:15 of audio with Whisper — roughly 2 min on this machine,
+20s elapsed. Still running; retrying now would start it over.
+```
+
+That heartbeat is not decoration. MCP clients reset a request's timeout when a progress notification arrives, and transcription used to be a single silent multi-minute await between "95%" and the result — indistinguishable from a hang, which is exactly how an agent decides to give up on a call that was working. The percentage deliberately does not creep upward: there is no honest way to know how far through a Whisper run you are, and a fabricated bar invites a prediction that cannot be made.
+
+Three things follow, and they are easy to misread:
 
 - **A timed-out call is not lost work.** The client stops waiting; the server does not stop working. Transcription runs to completion and the result is cached (below), so **asking again is the fix** — the second call reuses the transcript and finishes in seconds.
+- **Retrying immediately with lighter options is the one thing that makes it worse.** It abandons the run in progress and starts over, so a working export becomes a loop of timeouts. The server instructions tell the agent this explicitly, along with checking `get_metadata` first (fast, no download) so it can tell you the expected wait before starting rather than discovering it.
 - **`detail: "brief"` appearing to "work" is not evidence that frames are broken.** Brief skips frame extraction *and* is fast enough to return, so a run that succeeds without frames looks like a frame failure when it is a transcription timeout.
 
 Levers, in order of impact: ask again (warm cache), `detail: "brief"` if you only want the transcript, `frameOcrWeight: 0`, `frameSelection: "sceneChange"`, a smaller `maxFrames`. Or run the [CLI](#cli-one-shot-no-mcp-client), which has no client timeout at all — `--zip <dir>` produces the same bundle and simply takes as long as it takes.

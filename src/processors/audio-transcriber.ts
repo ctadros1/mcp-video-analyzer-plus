@@ -76,6 +76,28 @@ export async function extractAudioTrack(videoPath: string, outputDir: string): P
  * domain glossary for one hard clip without restarting the server. Unset fields
  * fall back to the env defaults.
  */
+/**
+ * Rough wall-clock estimate for transcribing `durationSeconds` of audio.
+ *
+ * Calibrated on a measured run: a 6.5-minute 1080p talk transcribed in about
+ * two minutes on CPU with `openai-whisper`, which is ~0.3x realtime. The factor
+ * is deliberately pessimistic against that — hardware, model size and backend
+ * move this by more than a factor of two, and an estimate that runs short is
+ * worse than one that runs long, because the caller acts on it by deciding
+ * whether to keep waiting.
+ *
+ * Presented to users as an approximation, never as a deadline.
+ */
+export function estimateTranscriptionSeconds(durationSeconds: number): number {
+  return Math.max(15, Math.round(durationSeconds * 0.35));
+}
+
+/** "4 min" / "45s" — a duration a person can act on, not a precise figure. */
+export function approximateDuration(seconds: number): string {
+  if (seconds < 90) return `${Math.max(5, Math.round(seconds / 5) * 5)}s`;
+  return `${Math.round(seconds / 60)} min`;
+}
+
 export interface TranscribeOptions {
   /** Whisper model name, e.g. `small`, `medium` (overrides WHISPER_MODEL). */
   model?: string;
