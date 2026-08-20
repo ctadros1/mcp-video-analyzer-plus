@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -6,6 +7,19 @@ import { afterEach, describe, expect, it } from 'vitest';
 const TIMEOUT_MS = 15000;
 const testDir = fileURLToPath(new URL('.', import.meta.url));
 const entryPoint = join(testDir, '..', '..', 'dist', 'index.js');
+
+/**
+ * The name the server must advertise, read from package.json rather than
+ * written here as a literal.
+ *
+ * A hardcoded copy is what made this test fail on the rename: `server.ts` moved
+ * to the fork's name and the only thing that noticed was a smoke run, which is
+ * NOT part of `npm run check`. Deriving it means the two can never disagree —
+ * and if they ever should, this fails naming both sides.
+ */
+const packageName = (
+  JSON.parse(readFileSync(join(testDir, '..', '..', 'package.json'), 'utf8')) as { name: string }
+).name;
 
 describe('MCP server smoke test', () => {
   let proc: ChildProcess | null = null;
@@ -82,7 +96,7 @@ describe('MCP server smoke test', () => {
 
       // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
       const parsed = JSON.parse(jsonMatch![0]);
-      expect(parsed.result?.serverInfo?.name).toBe('mcp-video-analyzer');
+      expect(parsed.result?.serverInfo?.name).toBe(packageName);
       expect(parsed.result?.capabilities).toBeDefined();
     },
     TIMEOUT_MS + 5000,
