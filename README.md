@@ -667,6 +667,15 @@ Levers, in order of impact: ask again (warm cache), `detail: "brief"` if you onl
 
 Whisper transcripts of **local files** are cached in the per-user cache directory (`mcp-video-analyzer/transcripts/`), automatically and by default. A repeat analysis of the same file reuses the transcript instead of re-transcribing, and says so in `warnings`.
 
+**The cache is shared across tools**, which gives you a way to keep any single call short on a long video: run `get_transcript` first to absorb the slow part, then `analyze_video` or `export_video_bundle` reuses it. Measured on an 8:23 1080p video with nothing cached:
+
+| call | time | |
+|---|---|---|
+| `get_transcript` | **43s** | transcribes and caches |
+| `export_video_bundle` | **82s** | reuses the transcript; the remaining cost is frame extraction and OCR |
+
+versus ~125s in a single call. Neither half is instant — splitting the work does not make it faster, it makes each call shorter.
+
 The entry is keyed on the file's `mtime:size` as well as its path, so editing or replacing the video invalidates it rather than serving the transcript of whatever used to have that name. The transcription options are in the key too — a different model or forced language is a different transcript — as are the `WHISPER_*` environment settings, so changing the backend invalidates rather than serving a stale result.
 
 This is deliberately **not** the [`MCP_WRITE_SIDECARS`](#persistent-sidecars-resumable-bulk-processing) mechanism, which stays opt-in because it writes `<stem>.vtt` next to your video. This cache touches nothing in your folders, which is why it can be on by default. Remote sources are not cached: there is no local stamp to invalidate against, and their transcripts usually come from native captions, which are cheap to refetch.

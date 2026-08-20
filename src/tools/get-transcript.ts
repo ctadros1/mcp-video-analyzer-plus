@@ -2,8 +2,13 @@ import type { FastMCP } from 'fastmcp';
 import { UserError } from 'fastmcp';
 import { z } from 'zod';
 import { getAdapter } from '../adapters/adapter.interface.js';
-import { extractAudioTrack, transcribeAudio } from '../processors/audio-transcriber.js';
-import { createProgressReporter } from '../utils/progress.js';
+import {
+  approximateDuration,
+  estimateTranscriptionSeconds,
+  extractAudioTrack,
+  transcribeAudio,
+} from '../processors/audio-transcriber.js';
+import { createProgressReporter, withProgressHeartbeat } from '../utils/progress.js';
 import {
   localFallbackPathParam,
   remoteFailureInWarnings,
@@ -12,6 +17,7 @@ import {
   videoUrlParam,
 } from '../utils/source-fallback.js';
 import { cleanupTempDir, createTempDir } from '../utils/temp-files.js';
+import { readCachedTranscript, writeCachedTranscript } from '../utils/transcript-cache.js';
 import { warningReason } from '../utils/warnings.js';
 
 const GetTranscriptSchema = z.object({
@@ -50,6 +56,8 @@ Faster than analyze_video when you only need the transcript.
 
 If the platform has no native transcript, attempts Whisper fallback transcription
 (requires @huggingface/transformers, whisper CLI, or OPENAI_API_KEY).
+
+Whisper transcripts of local files are cached and SHARED with analyze_video and export_video_bundle. On a long video that is how to keep any single call short: run get_transcript first to absorb the slow part, then the analysis or export reuses it and finishes in seconds. Transcription reports progress every 10 seconds — if those are arriving, wait rather than retrying.
 
 Supports: Loom (loom.com/share/...), YouTube/Vimeo/TikTok/Instagram/X/Twitch/Dailymotion/Facebook (requires yt-dlp; native captions preferred), direct video URLs (.mp4, .webm, .mov), and local video files (absolute path or file:// URI). For local files a sidecar .vtt/.srt next to the file is used first, then an embedded subtitle track, and only then the Whisper fallback if neither exists.
 
@@ -109,21 +117,49 @@ Pass localFallbackPath alongside url to fall back to a local copy of the video w
           } else {
             let tempDir: string | null = null;
             try {
-              await progress(45, 'No native transcript, downloading video for Whisper...');
-              tempDir = await createTempDir();
-              const videoPath = await adapter.downloadVideo(input, tempDir, (w) =>
-                warnings.push(w),
-              );
-              if (videoPath) {
-                await progress(65, 'Transcribing audio with Whisper...');
-                const audioPath = await extractAudioTrack(videoPath, tempDir);
-                transcript = await transcribeAudio(audioPath, transcribeOpts, (w) =>
+              // A transcript this machine already produced for this exact file.
+              // Checked BEFORE the download, because on a hit there is nothing
+              // to download for. This is the same cache the analysis pipeline
+              // fills, so get_transcript and analyze_video now warm each other:
+              // on a long video, running the transcript-only call first absorbs
+              // the slow part and leaves the export a short call.
+              const cached = await readCachedTranscript(input, transcribeOpts);
+              if (cached) {
+                transcript = cached;
+                warnings.push(
+                  'Transcript reused from a previous Whisper run on this file (cached locally).',
+                );
+              } else {
+                await progress(45, 'No native transcript, downloading video for Whisper...');
+                tempDir = await createTempDir();
+                const videoPath = await adapter.downloadVideo(input, tempDir, (w) =>
                   warnings.push(w),
                 );
-                if (transcript.length > 0) {
-                  warnings.push(
-                    'Transcript generated via Whisper fallback (no native transcript available).',
+                if (videoPath) {
+                  const audioPath = await extractAudioTrack(videoPath, tempDir);
+                  const spoken = await adapter
+                    .getMetadata(input)
+                    .then((m) => m.duration)
+                    .catch(() => 0);
+                  const estimate = approximateDuration(estimateTranscriptionSeconds(spoken));
+
+                  // Same reason as the analysis pipeline: a single multi-minute
+                  // await, and a client that hears nothing treats it as a hang
+                  // rather than as work still in progress.
+                  transcript = await withProgressHeartbeat(
+                    progress,
+                    65,
+                    (elapsed) =>
+                      `Transcribing with Whisper — roughly ${estimate} on this machine, ${approximateDuration(elapsed)} elapsed. Still running; retrying now would start it over.`,
+                    () => transcribeAudio(audioPath, transcribeOpts, (w) => warnings.push(w)),
                   );
+
+                  if (transcript.length > 0) {
+                    warnings.push(
+                      'Transcript generated via Whisper fallback (no native transcript available).',
+                    );
+                    await writeCachedTranscript(input, transcribeOpts, transcript);
+                  }
                 }
               }
             } catch (e: unknown) {
